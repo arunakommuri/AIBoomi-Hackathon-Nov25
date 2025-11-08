@@ -39,8 +39,10 @@ export function formatOrderResponse(orders: Order[], total?: number, offset?: nu
 
   if (orders.length === 1 && !total) {
     const order = orders[0];
-    const dateStr = order.fulfillment_date
-      ? ` - Fulfill by: ${formatDate(order.fulfillment_date)}`
+    // Access fulfillment_date - handle both Date objects and string dates from PostgreSQL
+    const fulfillmentDate = order.fulfillment_date;
+    const dateStr = fulfillmentDate != null
+      ? ` - Fulfill by: ${formatDate(fulfillmentDate)}`
       : '';
     return `Order ${order.order_id || order.id}: ${order.product_name} x${order.quantity} (${order.status})${dateStr}`;
   }
@@ -50,8 +52,10 @@ export function formatOrderResponse(orders: Order[], total?: number, offset?: nu
   
   let response = `You have ${total !== undefined ? total : showingCount} order${total !== undefined && total !== 1 ? 's' : ''}:\n\n`;
   orders.forEach((order, index) => {
-    const dateStr = order.fulfillment_date
-      ? ` - Fulfill by: ${formatDate(order.fulfillment_date)}`
+    // Access fulfillment_date - handle both Date objects and string dates from PostgreSQL
+    const fulfillmentDate = order.fulfillment_date;
+    const dateStr = fulfillmentDate != null
+      ? ` - Fulfill by: ${formatDate(fulfillmentDate)}`
       : ' - No fulfillment date';
     const itemNumber = (offset || 0) + index + 1;
     response += `${itemNumber}. Order ${order.order_id || order.id}: ${order.product_name} x${order.quantity} (${order.status})${dateStr}\n`;
@@ -89,23 +93,31 @@ export function formatUpdateOrderResponse(order: Order): string {
   return `Order ${order.order_id || order.id} has been updated. Status: ${order.status}`;
 }
 
-function formatDate(date: Date | string): string {
+export function formatDate(date: Date | string): string {
+  if (!date) return '';
+  
   const d = typeof date === 'string' ? new Date(date) : date;
-  const now = new Date();
-  const diffTime = d.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) {
-    return 'today';
-  } else if (diffDays === 1) {
-    return 'tomorrow';
-  } else if (diffDays === -1) {
-    return 'yesterday';
-  } else if (diffDays > 0 && diffDays <= 7) {
-    return `in ${diffDays} days`;
-  } else {
-    return d.toLocaleDateString();
+  
+  // Check if date is valid
+  if (isNaN(d.getTime())) {
+    return '';
   }
+  
+  // Always format as absolute date-time value (MM/DD/YYYY HH:MM AM/PM)
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const day = d.getDate().toString().padStart(2, '0');
+  const year = d.getFullYear();
+  
+  const hours = d.getHours();
+  const minutes = d.getMinutes();
+  
+  // Format time in 12-hour format with AM/PM
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
+  const formattedHours = displayHours.toString().padStart(2, '0');
+  const formattedMinutes = minutes.toString().padStart(2, '0');
+  
+  return `${month}/${day}/${year} ${formattedHours}:${formattedMinutes} ${period}`;
 }
 
 

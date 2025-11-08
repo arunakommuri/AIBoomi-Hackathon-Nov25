@@ -125,17 +125,49 @@ export async function initializeSchema(): Promise<void> {
       END $$;`
     );
 
-    // Create pending_confirmations table for task update confirmations
+    // Create pending_confirmations table for task and order update confirmations
     await query(
       `CREATE TABLE IF NOT EXISTS pending_confirmations (
         id SERIAL PRIMARY KEY,
         user_number VARCHAR(255) NOT NULL,
-        task_id INTEGER NOT NULL,
+        task_id INTEGER,
+        order_id VARCHAR(255),
         updates JSONB NOT NULL,
         original_message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '1 hour')
+        expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '1 hour'),
+        UNIQUE(user_number)
       )`
+    );
+
+    // Add order_id column if it doesn't exist (for existing databases)
+    await query(
+      `DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'pending_confirmations' AND column_name = 'order_id'
+        ) THEN
+          ALTER TABLE pending_confirmations ADD COLUMN order_id VARCHAR(255);
+        END IF;
+        -- Make task_id nullable if it's currently NOT NULL
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'pending_confirmations' 
+          AND column_name = 'task_id' 
+          AND is_nullable = 'NO'
+        ) THEN
+          ALTER TABLE pending_confirmations ALTER COLUMN task_id DROP NOT NULL;
+        END IF;
+        -- Add unique constraint on user_number if it doesn't exist
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints 
+          WHERE table_name = 'pending_confirmations' 
+          AND constraint_name = 'pending_confirmations_user_number_key'
+        ) THEN
+          ALTER TABLE pending_confirmations ADD CONSTRAINT pending_confirmations_user_number_key UNIQUE (user_number);
+        END IF;
+      END $$;`
     );
 
     // Create pagination_state table for tracking list pagination

@@ -1,0 +1,64 @@
+// Helper function to parse order/task number from user message
+// Handles: "3rd order", "first order", "order 2", "2", "third", etc.
+export function parseOrderNumberFromMessage(message: string, maxNumber: number): number | null {
+  const lowerMessage = message.toLowerCase();
+  
+  // Map of ordinal words to numbers (use word boundaries to avoid false matches)
+  const ordinalWords: Record<string, number> = {
+    'first': 1, '1st': 1,
+    'second': 2, '2nd': 2,
+    'third': 3, '3rd': 3,
+    'fourth': 4, '4th': 4,
+    'fifth': 5, '5th': 5,
+    'sixth': 6, '6th': 6,
+    'seventh': 7, '7th': 7,
+    'eighth': 8, '8th': 8,
+    'ninth': 9, '9th': 9,
+    'tenth': 10, '10th': 10
+  };
+  
+  // Try to find ordinal words with word boundaries
+  for (const [word, num] of Object.entries(ordinalWords)) {
+    const wordRegex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (wordRegex.test(lowerMessage) && num <= maxNumber) {
+      return num;
+    }
+  }
+  
+  // Try to find numeric patterns
+  const numericPatterns = [
+    /(?:order|task|item|number)\s+(\d+)/i,
+    /(\d+)(?:st|nd|rd|th)?\s+(?:order|task|item)/i,
+    /\b(\d+)(?:st|nd|rd|th)\b/i,
+    /^(\d+)$/,
+    /\b(\d+)\b/
+  ];
+  
+  for (const pattern of numericPatterns) {
+    const match = lowerMessage.match(pattern);
+    if (match && match[1]) {
+      const num = parseInt(match[1]);
+      if (num > 0 && num <= maxNumber) {
+        return num;
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Helper function to parse order mappings from message body
+export function parseOrderMappingsFromMessage(messageBody: string): Record<string, string> {
+  const mappings: Record<string, string> = {};
+  const orderPattern = /(\d+)\.\s*Order\s+([A-Z0-9-]+):/gi;
+  let match;
+  
+  while ((match = orderPattern.exec(messageBody)) !== null) {
+    const prefixNumber = match[1];
+    const orderId = match[2];
+    mappings[prefixNumber] = orderId;
+  }
+  
+  return mappings;
+}
+

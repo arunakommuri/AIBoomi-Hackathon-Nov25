@@ -109,3 +109,114 @@ export function parseDateRange(dateRange: string): DateRange {
   };
 }
 
+/**
+ * Parse date/time strings like "today 5pm", "tomorrow 8am", "day after tomorrow @7pm"
+ * Returns a Date object with the parsed date and time, or null if parsing fails
+ */
+export function parseDateTime(dateTimeStr: string): Date | null {
+  if (!dateTimeStr) return null;
+  
+  const now = new Date();
+  const lowerStr = dateTimeStr.toLowerCase().trim();
+  
+  // Extract time from the string (handles formats like "5pm", "@5pm", "8am", "7:30pm", "14:00", etc.)
+  let hours: number | null = null;
+  let minutes: number = 0;
+  
+  // Match time patterns: "5pm", "@5pm", "8am", "7:30pm", "14:00", "9:15am", etc.
+  // Pattern 1: With colon and optional am/pm (e.g., "7:30pm", "@7:30pm", "14:00")
+  const colonPattern = /@?(\d{1,2}):(\d{2})\s*(am|pm)?/i;
+  const colonMatch = lowerStr.match(colonPattern);
+  if (colonMatch) {
+    let parsedHours = parseInt(colonMatch[1]);
+    minutes = parseInt(colonMatch[2]);
+    const period = colonMatch[3]?.toLowerCase();
+    
+    // If no period specified and hours > 12, assume 24-hour format
+    if (!period) {
+      if (parsedHours >= 0 && parsedHours <= 23 && minutes >= 0 && minutes <= 59) {
+        hours = parsedHours;
+      }
+    } else {
+      // 12-hour format with am/pm
+      if (period === 'pm' && parsedHours !== 12) {
+        parsedHours += 12;
+      } else if (period === 'am' && parsedHours === 12) {
+        parsedHours = 0;
+      }
+      if (parsedHours >= 0 && parsedHours <= 23 && minutes >= 0 && minutes <= 59) {
+        hours = parsedHours;
+      }
+    }
+  }
+  
+  // Pattern 2: Without colon, just hour and am/pm (e.g., "5pm", "@5pm", "8am")
+  if (hours === null) {
+    const simpleTimeMatch = lowerStr.match(/@?(\d{1,2})\s*(am|pm)/i);
+    if (simpleTimeMatch) {
+      let parsedHours = parseInt(simpleTimeMatch[1]);
+      const period = simpleTimeMatch[2].toLowerCase();
+      
+      if (period === 'pm' && parsedHours !== 12) {
+        parsedHours += 12;
+      } else if (period === 'am' && parsedHours === 12) {
+        parsedHours = 0;
+      }
+      
+      if (parsedHours >= 0 && parsedHours <= 23) {
+        hours = parsedHours;
+        minutes = 0;
+      }
+    }
+  }
+  
+  // Parse the date part - check for date keywords FIRST before removing time patterns
+  // This ensures we catch "today evening 6pm" correctly
+  let targetDate = new Date(now);
+  
+  // Check for date keywords in the original string (case-insensitive)
+  // We check the original string to catch patterns like "today evening 6pm"
+  const hasToday = /\btoday\b/i.test(lowerStr);
+  const hasTomorrow = /\btomorrow\b/i.test(lowerStr);
+  const hasDayAfter = /\bday\s+after\s+tomorrow\b/i.test(lowerStr) || /\bday\s+after\b/i.test(lowerStr);
+  const hasYesterday = /\byesterday\b/i.test(lowerStr);
+  const hasNextWeek = /\bnext\s+week\b/i.test(lowerStr);
+  const hasNextMonth = /\bnext\s+month\b/i.test(lowerStr);
+  
+  if (hasToday) {
+    // Today - keep current date, just update time if provided
+    targetDate = new Date(now);
+  } else if (hasDayAfter) {
+    targetDate.setDate(targetDate.getDate() + 2);
+  } else if (hasTomorrow) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (hasYesterday) {
+    targetDate.setDate(targetDate.getDate() - 1);
+  } else if (hasNextWeek) {
+    targetDate.setDate(targetDate.getDate() + 7);
+  } else if (hasNextMonth) {
+    targetDate.setMonth(targetDate.getMonth() + 1);
+  } else {
+    // No relative date keywords found - check if we have time but no date
+    // If time is provided without a date keyword, assume today
+    if (hours !== null) {
+      targetDate = new Date(now);
+    } else {
+      // No date indicators and no time - let existing parser handle it
+      return null;
+    }
+  }
+  
+  // Set the time if it was parsed
+  if (hours !== null) {
+    targetDate.setHours(hours, minutes, 0, 0);
+  } else {
+    // If no time specified, keep the current time or set to end of day
+    // For fulfillment dates, we might want to set a default time
+    // For now, keep the time as is (or set to a reasonable default like 5pm)
+    targetDate.setHours(17, 0, 0, 0); // Default to 5pm if no time specified
+  }
+  
+  return targetDate;
+}
+

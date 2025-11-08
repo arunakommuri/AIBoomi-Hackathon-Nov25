@@ -1,5 +1,5 @@
 import { query } from './db';
-import { parseDateRange, DateRange } from './date-utils';
+import { parseDateRange, DateRange, parseDateTime } from './date-utils';
 
 export interface Task {
   id: number;
@@ -51,73 +51,158 @@ export async function createTask(
       parsedDueDate = new Date(now);
       parsedDueDate.setMonth(parsedDueDate.getMonth() + 1);
     } else {
-      // Try to parse dates like "Saturday 15th November 2PM" or "15th November"
-      try {
-        // Handle dates with day names and ordinal numbers (e.g., "Saturday 15th November")
-        const dateStr = dueDate.replace(/(\d+)(st|nd|rd|th)/g, '$1'); // Remove ordinal suffixes
-        parsedDueDate = new Date(dateStr);
+      // Check for day names like "Tuesday", "coming Wednesday", "this Friday", "next Monday"
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      let targetDayIndex: number | null = null;
+      
+      // Find which day name is mentioned
+      for (let i = 0; i < dayNames.length; i++) {
+        if (lowerDueDate.includes(dayNames[i])) {
+          targetDayIndex = i;
+          break;
+        }
+      }
+      
+      // If a day name is found, calculate the date
+      if (targetDayIndex !== null) {
+        const isNext = lowerDueDate.includes('next') || lowerDueDate.includes('coming');
+        const isThis = lowerDueDate.includes('this');
         
-        // If parsing failed, try alternative parsing
-        if (isNaN(parsedDueDate.getTime())) {
-          // Try parsing with date-fns or manual parsing for formats like "Saturday 15th November 2PM"
-          const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
-                            'july', 'august', 'september', 'october', 'november', 'december'];
-          const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-          
-          const lowerStr = dateStr.toLowerCase();
-          let day: number | null = null;
-          let month: number | null = null;
-          let year = now.getFullYear();
-          let hour = 0;
-          let minute = 0;
-          
-          // Extract day
-          const dayMatch = dateStr.match(/\b(\d{1,2})\b/);
-          if (dayMatch) {
-            day = parseInt(dayMatch[1]);
+        parsedDueDate = new Date(now);
+        const currentDay = parsedDueDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        
+        let daysToAdd = targetDayIndex - currentDay;
+        
+        if (isNext || lowerDueDate.includes('coming')) {
+          // "next Tuesday" or "coming Wednesday" - find the next occurrence
+          if (daysToAdd <= 0) {
+            daysToAdd += 7; // Move to next week
           }
-          
-          // Extract month (JavaScript months are 0-indexed)
-          for (let i = 0; i < monthNames.length; i++) {
-            if (lowerStr.includes(monthNames[i])) {
-              month = i; // Already 0-indexed for JavaScript Date
-              break;
-            }
+        } else if (isThis) {
+          // "this Tuesday" - find current or next occurrence
+          if (daysToAdd < 0) {
+            daysToAdd += 7; // Move to next week
           }
-          
-          // Extract time (2PM, 14:00, etc.)
-          const timeMatch = lowerStr.match(/(\d{1,2})\s*(pm|am|:(\d{2}))/i);
-          if (timeMatch) {
-            hour = parseInt(timeMatch[1]);
-            if (timeMatch[2] && timeMatch[2].toLowerCase() === 'pm' && hour !== 12) {
-              hour += 12;
-            } else if (timeMatch[2] && timeMatch[2].toLowerCase() === 'am' && hour === 12) {
-              hour = 0;
-            }
-            if (timeMatch[3]) {
-              minute = parseInt(timeMatch[3]);
-            }
-          }
-          
-          // If we have day and month, create the date
-          if (day !== null && month !== null) {
-            parsedDueDate = new Date(year, month, day, hour, minute);
-            // If the date is in the past, assume next year
-            if (parsedDueDate < now) {
-              parsedDueDate.setFullYear(year + 1);
-            }
-          } else {
-            // Fallback to standard Date parsing
-            parsedDueDate = new Date(dateStr);
-            if (isNaN(parsedDueDate.getTime())) {
-              parsedDueDate = null;
-            }
+        } else {
+          // Just "Tuesday" - find the next occurrence (same as "next")
+          if (daysToAdd <= 0) {
+            daysToAdd += 7; // Move to next week
           }
         }
+        
+        parsedDueDate.setDate(parsedDueDate.getDate() + daysToAdd);
+        
+        // Extract time if specified (e.g., "Tuesday 2PM", "coming Wednesday at 3pm")
+        const timeMatch = lowerDueDate.match(/(\d{1,2})\s*(pm|am|:(\d{2}))/i);
+        if (timeMatch) {
+          let hour = parseInt(timeMatch[1]);
+          let minute = 0;
+          if (timeMatch[2] && timeMatch[2].toLowerCase() === 'pm' && hour !== 12) {
+            hour += 12;
+          } else if (timeMatch[2] && timeMatch[2].toLowerCase() === 'am' && hour === 12) {
+            hour = 0;
+          }
+          if (timeMatch[3]) {
+            minute = parseInt(timeMatch[3]);
+          }
+          parsedDueDate.setHours(hour, minute, 0, 0);
+        } else {
+          // Reset time to start of day if no time specified
+          parsedDueDate.setHours(0, 0, 0, 0);
+        }
+      } else {
+        // Try to parse dates like "Saturday 15th November 2PM" or "15th November"
+        try {
+          // Handle dates with day names and ordinal numbers (e.g., "Saturday 15th November")
+          const dateStr = dueDate.replace(/(\d+)(st|nd|rd|th)/g, '$1'); // Remove ordinal suffixes
+          parsedDueDate = new Date(dateStr);
+          
+          // If parsing failed, try alternative parsing
+          if (isNaN(parsedDueDate.getTime())) {
+            // Try parsing with date-fns or manual parsing for formats like "Saturday 15th November 2PM" or "15th dec"
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                              'july', 'august', 'september', 'october', 'november', 'december'];
+            const monthAbbreviations = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                                       'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+            
+            const lowerStr = dateStr.toLowerCase();
+            let day: number | null = null;
+            let month: number | null = null;
+            let year = now.getFullYear(); // Default to current year
+            let hour = 0;
+            let minute = 0;
+            
+            // Extract day
+            const dayMatch = dateStr.match(/\b(\d{1,2})\b/);
+            if (dayMatch) {
+              day = parseInt(dayMatch[1]);
+            }
+            
+            // Extract month name (full name) if present
+            for (let i = 0; i < monthNames.length; i++) {
+              if (lowerStr.includes(monthNames[i])) {
+                month = i; // Already 0-indexed for JavaScript Date
+                break;
+              }
+            }
+            
+            // If month not found, try month abbreviations
+            if (month === null) {
+              for (let i = 0; i < monthAbbreviations.length; i++) {
+                // Use word boundary to match whole words only (e.g., "dec" not "december")
+                const abbrevRegex = new RegExp(`\\b${monthAbbreviations[i]}\\b`);
+                if (abbrevRegex.test(lowerStr)) {
+                  month = i;
+                  break;
+                }
+              }
+            }
+            
+            // Extract time (2PM, 14:00, etc.)
+            const timeMatch = lowerStr.match(/(\d{1,2})\s*(pm|am|:(\d{2}))/i);
+            if (timeMatch) {
+              hour = parseInt(timeMatch[1]);
+              if (timeMatch[2] && timeMatch[2].toLowerCase() === 'pm' && hour !== 12) {
+                hour += 12;
+              } else if (timeMatch[2] && timeMatch[2].toLowerCase() === 'am' && hour === 12) {
+                hour = 0;
+              }
+              if (timeMatch[3]) {
+                minute = parseInt(timeMatch[3]);
+              }
+            }
+            
+            // If only day is provided (no month), use current month and year
+            if (day !== null && month === null) {
+              month = now.getMonth(); // Current month (0-indexed)
+              parsedDueDate = new Date(year, month, day, hour, minute);
+              
+              // If the date is in the past, move to next month
+              if (parsedDueDate < now) {
+                parsedDueDate.setMonth(month + 1);
+                // JavaScript automatically handles year rollover when month exceeds 11
+              }
+            } else if (day !== null && month !== null) {
+              // Both day and month provided - defaults to current year
+              parsedDueDate = new Date(year, month, day, hour, minute);
+              // If the date is in the past, move to next year
+              if (parsedDueDate < now) {
+                parsedDueDate.setFullYear(year + 1);
+              }
+            } else {
+              // Fallback to standard Date parsing
+              parsedDueDate = new Date(dateStr);
+              if (isNaN(parsedDueDate.getTime())) {
+                parsedDueDate = null;
+              }
+            }
+          }
       } catch (error) {
         console.error('Error parsing date:', error);
         parsedDueDate = null;
       }
+    }
     }
   }
 
@@ -247,57 +332,135 @@ export async function createOrder(
   // Parse fulfillment date if provided (similar to task due date parsing)
   let parsedFulfillmentDate: Date | null = null;
   if (fulfillmentDate) {
-    const now = new Date();
-    const lowerDate = fulfillmentDate.toLowerCase().trim();
+    // First try the new date/time parser for relative dates with times
+    parsedFulfillmentDate = parseDateTime(fulfillmentDate);
     
-    if (lowerDate === 'tomorrow') {
-      parsedFulfillmentDate = new Date(now);
-      parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 1);
-    } else if (lowerDate.includes('next week')) {
-      parsedFulfillmentDate = new Date(now);
-      parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 7);
-    } else if (lowerDate.includes('next month')) {
-      parsedFulfillmentDate = new Date(now);
-      parsedFulfillmentDate.setMonth(parsedFulfillmentDate.getMonth() + 1);
-    } else {
-      // Try to parse dates like "15th November" or "Saturday 15th November"
-      try {
-        const dateStr = fulfillmentDate.replace(/(\d+)(st|nd|rd|th)/g, '$1');
-        parsedFulfillmentDate = new Date(dateStr);
+    // If the new parser didn't handle it, fall back to existing logic
+    if (!parsedFulfillmentDate) {
+      const now = new Date();
+      const lowerDate = fulfillmentDate.toLowerCase().trim();
+      
+      if (lowerDate === 'tomorrow') {
+        parsedFulfillmentDate = new Date(now);
+        parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 1);
+      } else if (lowerDate.includes('next week')) {
+        parsedFulfillmentDate = new Date(now);
+        parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 7);
+      } else if (lowerDate.includes('next month')) {
+        parsedFulfillmentDate = new Date(now);
+        parsedFulfillmentDate.setMonth(parsedFulfillmentDate.getMonth() + 1);
+      } else {
+        // Check for day names like "Tuesday", "coming Wednesday", "this Friday", "next Monday"
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        let targetDayIndex: number | null = null;
         
-        if (isNaN(parsedFulfillmentDate.getTime())) {
-          // Try manual parsing for formats like "15th November"
-          const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
-                            'july', 'august', 'september', 'october', 'november', 'december'];
-          const lowerStr = dateStr.toLowerCase();
-          let day: number | null = null;
-          let month: number | null = null;
-          let year = now.getFullYear();
-          
-          const dayMatch = dateStr.match(/\b(\d{1,2})\b/);
-          if (dayMatch) {
-            day = parseInt(dayMatch[1]);
+        // Find which day name is mentioned
+        for (let i = 0; i < dayNames.length; i++) {
+          if (lowerDate.includes(dayNames[i])) {
+            targetDayIndex = i;
+            break;
           }
+        }
+        
+        // If a day name is found, calculate the date
+        if (targetDayIndex !== null) {
+          const isNext = lowerDate.includes('next') || lowerDate.includes('coming');
+          const isThis = lowerDate.includes('this');
           
-          for (let i = 0; i < monthNames.length; i++) {
-            if (lowerStr.includes(monthNames[i])) {
-              month = i;
-              break;
+          parsedFulfillmentDate = new Date(now);
+          const currentDay = parsedFulfillmentDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          
+          let daysToAdd = targetDayIndex - currentDay;
+          
+          if (isNext || lowerDate.includes('coming')) {
+            // "next Tuesday" or "coming Wednesday" - find the next occurrence
+            if (daysToAdd <= 0) {
+              daysToAdd += 7; // Move to next week
             }
-          }
-          
-          if (day !== null && month !== null) {
-            parsedFulfillmentDate = new Date(year, month, day);
-            if (parsedFulfillmentDate < now) {
-              parsedFulfillmentDate.setFullYear(year + 1);
+          } else if (isThis) {
+            // "this Tuesday" - find current or next occurrence
+            if (daysToAdd < 0) {
+              daysToAdd += 7; // Move to next week
             }
           } else {
+            // Just "Tuesday" - find the next occurrence (same as "next")
+            if (daysToAdd <= 0) {
+              daysToAdd += 7; // Move to next week
+            }
+          }
+          
+          parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + daysToAdd);
+          // Reset time to start of day (fulfillment dates typically don't have times)
+          parsedFulfillmentDate.setHours(0, 0, 0, 0);
+        } else {
+          // Try to parse dates like "15th November", "Saturday 15th November", or just "20th"
+          try {
+            const dateStr = fulfillmentDate.replace(/(\d+)(st|nd|rd|th)/g, '$1');
+            parsedFulfillmentDate = new Date(dateStr);
+            
+            if (isNaN(parsedFulfillmentDate.getTime())) {
+              // Try manual parsing for formats like "15th November", "15th dec", or just "20th"
+              const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                'july', 'august', 'september', 'october', 'november', 'december'];
+              const monthAbbreviations = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                                         'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+              const lowerStr = dateStr.toLowerCase();
+              let day: number | null = null;
+              let month: number | null = null;
+              let year = now.getFullYear(); // Default to current year
+              
+              // Extract day number
+              const dayMatch = dateStr.match(/\b(\d{1,2})\b/);
+              if (dayMatch) {
+                day = parseInt(dayMatch[1]);
+              }
+              
+              // Extract month name (full name) if present
+              for (let i = 0; i < monthNames.length; i++) {
+                if (lowerStr.includes(monthNames[i])) {
+                  month = i;
+                  break;
+                }
+              }
+              
+              // If month not found, try month abbreviations
+              if (month === null) {
+                for (let i = 0; i < monthAbbreviations.length; i++) {
+                  // Use word boundary to match whole words only (e.g., "dec" not "december")
+                  const abbrevRegex = new RegExp(`\\b${monthAbbreviations[i]}\\b`);
+                  if (abbrevRegex.test(lowerStr)) {
+                    month = i;
+                    break;
+                  }
+                }
+              }
+              
+              // If only day is provided (no month), use current month and year
+              if (day !== null && month === null) {
+                month = now.getMonth(); // Current month (0-indexed)
+                parsedFulfillmentDate = new Date(year, month, day);
+                
+                // If the date is in the past, move to next month
+                if (parsedFulfillmentDate < now) {
+                  parsedFulfillmentDate.setMonth(month + 1);
+                  // JavaScript automatically handles year rollover when month exceeds 11
+                }
+              } else if (day !== null && month !== null) {
+                // Both day and month provided - defaults to current year
+                parsedFulfillmentDate = new Date(year, month, day);
+                // If the date is in the past, move to next year
+                if (parsedFulfillmentDate < now) {
+                  parsedFulfillmentDate.setFullYear(year + 1);
+                }
+              } else {
+                parsedFulfillmentDate = null;
+              }
+            }
+          } catch (error) {
+            console.error('Error parsing fulfillment date:', error);
             parsedFulfillmentDate = null;
           }
         }
-      } catch (error) {
-        console.error('Error parsing fulfillment date:', error);
-        parsedFulfillmentDate = null;
       }
     }
   }
@@ -316,7 +479,8 @@ export async function getOrders(
   userNumber: string,
   filters?: { status?: string; limit?: number; dateRange?: string; offset?: number }
 ): Promise<{ orders: Order[]; total: number }> {
-  let queryText = 'SELECT * FROM orders WHERE user_number = $1';
+  // Explicitly select all columns including fulfillment_date to ensure it's included
+  let queryText = 'SELECT id, user_number, order_id, product_name, quantity, status, fulfillment_date, original_message, created_at, updated_at FROM orders WHERE user_number = $1';
   const params: any[] = [userNumber];
   let paramIndex = 2;
 

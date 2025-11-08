@@ -60,7 +60,18 @@ IMPORTANT RULES:
   * "Order..." or "I want to order..." → CREATE order
 - Intent "get": User wants to view/list their tasks, reminders, or orders (e.g., "show my tasks", "list orders", "what are my reminders", "my tasks", "orders this week", "tasks this month")
   * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year"
-- Intent "update": User wants to modify an existing task or order (e.g., "mark task 1 as completed", "update order #123")
+- Intent "update": User wants to modify an existing task or order. This includes:
+  * "mark task 1 as completed" → UPDATE task
+  * "update order #123" → UPDATE order
+  * "mark as done" → UPDATE (status: completed)
+  * "update to done" → UPDATE (status: completed)
+  * "set to completed" → UPDATE (status: completed)
+  * "move to done" → UPDATE (status: completed)
+  * "change status to processing" → UPDATE (status: processing)
+  * "mark as completed" → UPDATE (status: completed)
+  * "done" → UPDATE (status: completed)
+  * "complete" → UPDATE (status: completed)
+  * Any message containing status words like "done", "completed", "processing", "cancelled", "pending" when referring to existing items
 - Intent "unknown": Only use if truly cannot determine intent
 
 Entity Type Rules:
