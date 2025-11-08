@@ -26,21 +26,25 @@ This plan outlines the implementation of audio note and image processing capabil
 ### 2. Speech-to-Text (STT) Service
 **Location**: `apps/web/lib/stt.ts`
 
-**Options**:
-- **Option A**: Google Cloud Speech-to-Text API (recommended if using Gemini)
-- **Option B**: OpenAI Whisper API
-- **Option C**: AssemblyAI
-- **Option D**: Twilio Media Streams (real-time, but more complex)
+**Provider**: Sarvam.ai STT API
+- **API Endpoint**: `https://api.sarvam.ai/speech-to-text`
+- **Authentication**: `api-subscription-key` header
+- **Supported Formats**: WAV, MP3, AAC, AIFF, OGG, OPUS, FLAC, MP4/M4A, AMR, WMA, WebM, PCM
+- **Language Support**: Multiple Indian languages + English with auto-detection
+- **API Types**: 
+  - Real-Time API: For audio files under 30 seconds (immediate response)
+  - Batch API: For longer files (asynchronous processing)
 
 **Implementation**:
-- Accept audio file path/URL
-- Convert audio to text
-- Return transcribed text
+- Accept audio file path/URL or Buffer
+- Upload to Sarvam.ai API using multipart/form-data
+- Return transcribed text from response
 - Handle errors gracefully
+- Support both real-time and batch processing
 
 **Environment Variables**:
-- `GOOGLE_CLOUD_SPEECH_API_KEY` (if using Google)
-- `OPENAI_API_KEY` (if using OpenAI Whisper)
+- `SARVAM_AI_API_KEY`: API subscription key from Sarvam.ai dashboard
+- `SARVAM_AI_MODEL`: Optional model version (default: "saarika:v2.5")
 
 ### 3. Image Analysis with Gemini
 **Location**: `apps/web/lib/gemini.ts` (extend existing)
@@ -170,10 +174,9 @@ apps/web/
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.0-flash-lite-001
 
-# New - STT Options (choose one)
-GOOGLE_CLOUD_SPEECH_API_KEY=...  # If using Google Cloud Speech-to-Text
-OPENAI_API_KEY=...               # If using OpenAI Whisper
-ASSEMBLYAI_API_KEY=...           # If using AssemblyAI
+# New - STT (Sarvam.ai)
+SARVAM_AI_API_KEY=...            # Sarvam.ai API subscription key
+SARVAM_AI_MODEL=saarika:v2.5     # Optional: Model version
 
 # Media Storage (optional - for cloud storage)
 AWS_S3_BUCKET=...                # If storing in S3

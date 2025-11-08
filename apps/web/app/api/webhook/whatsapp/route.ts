@@ -10,6 +10,8 @@ import {
   loadMessageContext,
 } from '@/lib/actions';
 import { MessageService } from '@/lib/services/message-service';
+import { getFirstAudioMedia, downloadTwilioMedia } from '@/lib/media-handler';
+import { transcribeAudio } from '@/lib/stt';
 
 // Helper function to create TwiML XML response
 function createTwiMLResponse(message: string): NextResponse {
@@ -84,20 +86,81 @@ export async function POST(request: NextRequest) {
     // Initialize database schema (only creates tables if they don't exist)
     await MessageService.initializeDatabase();
 
-    // Store message in database
-    await MessageService.storeMessage(messageSid, from, body, referredMessageSid);
+    // Check for media (audio/image)
+    const audioMedia = getFirstAudioMedia(formData);
+    let processedBody = body;
+    let mediaInfo: {
+      url: string | null;
+      type: string | null;
+      contentType: string | null;
+      extractedText: string | null;
+      originalBody: string | null;
+      mediaData: Buffer | null;
+    } = {
+      url: null,
+      type: null,
+      contentType: null,
+      extractedText: null,
+      originalBody: body || null,
+      mediaData: null,
+    };
+
+    // If audio media is present, transcribe it
+    if (audioMedia) {
+      try {
+        console.log('Processing audio media:', audioMedia);
+        mediaInfo.url = audioMedia.url;
+        mediaInfo.type = 'audio';
+        mediaInfo.contentType = audioMedia.contentType;
+        
+        // Download audio from Twilio
+        const audioBuffer = await downloadTwilioMedia(audioMedia.url);
+        console.log('Downloaded audio, size:', audioBuffer.length, 'bytes');
+        
+        // Store the media file data
+        mediaInfo.mediaData = audioBuffer;
+        
+        // Transcribe audio using Sarvam.ai STT
+        const transcribedText = await transcribeAudio(audioBuffer);
+        console.log('Transcribed text:', transcribedText);
+        
+        // Store extracted text and use as processed body
+        mediaInfo.extractedText = transcribedText;
+        processedBody = transcribedText;
+      } catch (error) {
+        console.error('Error processing audio media:', error);
+        // If transcription fails, inform user and continue with original body (if any)
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        return createTwiMLResponse(
+          `I received your voice note, but I'm having trouble processing it. ${errorMessage}. Please try sending a text message instead.`
+        );
+      }
+    } else {
+      // No media - this is a text message
+      mediaInfo.type = 'text';
+      mediaInfo.originalBody = body || null;
+    }
+
+    // Store message in database with all media information
+    await MessageService.storeMessage(
+      messageSid,
+      from,
+      processedBody || body,
+      referredMessageSid,
+      mediaInfo
+    );
 
     // Process message
     let responseMessage = 'Hi';
     
-    if (body && body.trim()) {
+    if (processedBody && processedBody.trim()) {
       try {
         const userNumber = from;
-        const messageBody = body.trim().toLowerCase();
+        const messageBody = processedBody.trim().toLowerCase();
 
         // If message is forwarded, treat it as an order creation request
         if (isForwarded) {
-          const analysis = await analyzeMessage(body);
+          const analysis = await analyzeMessage(processedBody);
           // Force entity type to order for forwarded messages
           if (analysis.intent === 'create' || analysis.intent === 'unknown') {
             const orderAnalysis = {
@@ -105,7 +168,7 @@ export async function POST(request: NextRequest) {
               entityType: 'order',
               parameters: analysis.parameters || {}
             };
-            responseMessage = await handleCreate(userNumber, orderAnalysis, body);
+            responseMessage = await handleCreate(userNumber, orderAnalysis, processedBody);
             return createTwiMLResponse(responseMessage);
           }
         }
@@ -114,7 +177,7 @@ export async function POST(request: NextRequest) {
         if (referredMessageSid) {
           const context = await loadMessageContext(userNumber, referredMessageSid);
           if (context) {
-            const replyResponse = await handleReply(userNumber, body, referredMessageSid, context);
+            const replyResponse = await handleReply(userNumber, processedBody, referredMessageSid, context);
             if (replyResponse) {
               return createTwiMLResponse(replyResponse);
             }
@@ -134,10 +197,10 @@ export async function POST(request: NextRequest) {
         }
 
         // Analyze message and handle intent
-        const analysis = await analyzeMessage(body);
+        const analysis = await analyzeMessage(processedBody);
         const handler = INTENT_HANDLERS[analysis.intent];
         if (handler) {
-          responseMessage = await handler(userNumber, analysis, body);
+          responseMessage = await handler(userNumber, analysis, processedBody);
         } else {
           responseMessage = getUnknownIntentMessage();
         }
