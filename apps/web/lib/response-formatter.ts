@@ -75,10 +75,17 @@ export function formatCreateTaskResponse(task: Task): string {
   return `I've created a task "${task.title}"${dueDateStr}.`;
 }
 
-export function formatCreateOrderResponse(order: Order): string {
+export function formatCreateOrderResponse(order: Order, items?: Array<{productName: string; quantity: number}>): string {
   const dateStr = order.fulfillment_date
     ? ` to be fulfilled by ${formatDate(order.fulfillment_date)}`
     : '';
+  
+  // If items array is provided, list all items
+  if (items && items.length > 0) {
+    const itemsList = items.map(item => `${item.productName} x${item.quantity}`).join(', ');
+    return `I've created order ${order.order_id || order.id} with ${items.length} item${items.length > 1 ? 's' : ''}: ${itemsList}${dateStr}.`;
+  }
+  
   return `I've created order ${order.order_id || order.id} for ${order.product_name} x${order.quantity}${dateStr}.`;
 }
 
@@ -91,6 +98,54 @@ export function formatUpdateTaskResponse(task: Task): string {
 
 export function formatUpdateOrderResponse(order: Order): string {
   return `Order ${order.order_id || order.id} has been updated. Status: ${order.status}`;
+}
+
+export function formatOrderDetailsResponse(order: Order & { mediaInfo?: { url?: string; type?: string; extractedText?: string }; items?: Array<{productName: string; quantity: number}> }): string {
+  const fulfillmentDate = order.fulfillment_date
+    ? formatDate(order.fulfillment_date)
+    : 'Not set';
+  
+  const createdDate = order.created_at
+    ? formatDate(order.created_at)
+    : 'Unknown';
+  
+  const updatedDate = order.updated_at
+    ? formatDate(order.updated_at)
+    : 'Never';
+  
+  let response = `📦 Order Details\n\n`;
+  response += `Order ID: ${order.order_id || order.id}\n`;
+  
+  // If order has items array, show all items
+  if (order.items && order.items.length > 0) {
+    response += `Items (${order.items.length}):\n`;
+    order.items.forEach((item, index) => {
+      response += `  ${index + 1}. ${item.productName} x${item.quantity}\n`;
+    });
+    response += `Total Quantity: ${order.quantity}\n`;
+  } else {
+    response += `Product: ${order.product_name}\n`;
+    response += `Quantity: ${order.quantity}\n`;
+  }
+  
+  response += `Status: ${order.status}\n`;
+  response += `Fulfillment Date: ${fulfillmentDate}\n`;
+  response += `Created: ${createdDate}\n`;
+  response += `Last Updated: ${updatedDate}\n`;
+  
+  // Add media information if available
+  if (order.mediaInfo) {
+    response += `\n📎 Media Type: ${order.mediaInfo.type || 'Unknown'}`;
+    if (order.mediaInfo.extractedText) {
+      response += `\n📝 Extracted Text: ${order.mediaInfo.extractedText}`;
+    }
+  }
+  
+  if (order.original_message) {
+    response += `\n\n💬 Original Message: ${order.original_message}`;
+  }
+  
+  return response;
 }
 
 export function formatDate(date: Date | string): string {

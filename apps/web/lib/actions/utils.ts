@@ -50,14 +50,24 @@ export function parseOrderNumberFromMessage(message: string, maxNumber: number):
 // Helper function to parse order mappings from message body
 export function parseOrderMappingsFromMessage(messageBody: string): Record<string, string> {
   const mappings: Record<string, string> = {};
-  const orderPattern = /(\d+)\.\s*Order\s+([A-Z0-9-]+):/gi;
+  
+  // Pattern 1: "1. Order ORD-123: product x1" or "1. Order ORD-123-abc: product x1"
+  // This matches order IDs that start with ORD- followed by alphanumeric and hyphens
+  const orderPattern1 = /(\d+)\.\s*Order\s+([A-Z0-9-]+):/gi;
   let match;
   
-  while ((match = orderPattern.exec(messageBody)) !== null) {
+  while ((match = orderPattern1.exec(messageBody)) !== null) {
     const prefixNumber = match[1];
     const orderId = match[2];
-    mappings[prefixNumber] = orderId;
+    // Only add if it looks like an order ID (starts with ORD- or is alphanumeric with hyphens)
+    if (orderId.startsWith('ORD-') || /^[A-Z0-9-]+$/.test(orderId)) {
+      mappings[prefixNumber] = orderId;
+    }
   }
+  
+  // Pattern 2: "1. Order today evening 6pm: product x1" (no order ID in format)
+  // For these, we can't extract the order ID from the message, but the context
+  // should have the mappings stored from when the list was created
   
   return mappings;
 }

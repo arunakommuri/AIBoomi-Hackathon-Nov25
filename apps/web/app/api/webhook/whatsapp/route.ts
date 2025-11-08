@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { analyzeMessage } from '@/lib/gemini';
+import { analyzeMessage, type MessageAnalysis } from '@/lib/gemini';
 import {
   handleCreate,
   handleGet,
@@ -10,8 +10,9 @@ import {
   loadMessageContext,
 } from '@/lib/actions';
 import { MessageService } from '@/lib/services/message-service';
-import { getFirstAudioMedia, downloadTwilioMedia } from '@/lib/media-handler';
+import { getFirstAudioMedia, getFirstImageMedia, downloadTwilioMedia } from '@/lib/media-handler';
 import { transcribeAudio } from '@/lib/stt';
+import { analyzeImage } from '@/lib/gemini';
 
 // Helper function to create TwiML XML response
 function createTwiMLResponse(message: string): NextResponse {
@@ -88,7 +89,9 @@ export async function POST(request: NextRequest) {
 
     // Check for media (audio/image)
     const audioMedia = getFirstAudioMedia(formData);
+    const imageMedia = getFirstImageMedia(formData);
     let processedBody = body;
+    let imageAnalysisResult: MessageAnalysis | null = null; // Store image analysis for direct use
     let mediaInfo: {
       url: string | null;
       type: string | null;
@@ -133,6 +136,37 @@ export async function POST(request: NextRequest) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         return createTwiMLResponse(
           `I received your voice note, but I'm having trouble processing it. ${errorMessage}. Please try sending a text message instead.`
+        );
+      }
+    } else if (imageMedia) {
+      // If image media is present, analyze it with Gemini Vision
+      try {
+        console.log('Processing image media:', imageMedia);
+        mediaInfo.url = imageMedia.url;
+        mediaInfo.type = 'image';
+        mediaInfo.contentType = imageMedia.contentType;
+        
+        // Download image from Twilio
+        const imageBuffer = await downloadTwilioMedia(imageMedia.url);
+        console.log('Downloaded image, size:', imageBuffer.length, 'bytes');
+        
+        // Store the media file data
+        mediaInfo.mediaData = imageBuffer;
+        
+        // Analyze image using Gemini Vision API
+        const imageAnalysis = await analyzeImage(imageBuffer, imageMedia.contentType);
+        console.log('Image analysis result:', imageAnalysis);
+        
+        // Store extracted text and structured analysis
+        mediaInfo.extractedText = imageAnalysis.extractedText;
+        processedBody = imageAnalysis.extractedText;
+        imageAnalysisResult = imageAnalysis.analysis; // Store for direct use
+      } catch (error) {
+        console.error('Error processing image media:', error);
+        // If image analysis fails, inform user
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        return createTwiMLResponse(
+          `I received your image, but I'm having trouble processing it. ${errorMessage}. Please try sending a text message or describe what's in the image.`
         );
       }
     } else {
@@ -196,8 +230,17 @@ export async function POST(request: NextRequest) {
           return createTwiMLResponse(confirmationResponse);
         }
 
-        // Analyze message and handle intent
-        const analysis = await analyzeMessage(processedBody);
+        // Use image analysis if available, otherwise analyze the text
+        let analysis: MessageAnalysis;
+        if (imageAnalysisResult) {
+          // Use the structured analysis from image
+          analysis = imageAnalysisResult;
+          console.log('Using image analysis directly:', analysis);
+        } else {
+          // Analyze text message
+          analysis = await analyzeMessage(processedBody);
+        }
+        
         const handler = INTENT_HANDLERS[analysis.intent];
         if (handler) {
           responseMessage = await handler(userNumber, analysis, processedBody);

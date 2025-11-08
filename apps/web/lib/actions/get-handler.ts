@@ -1,6 +1,7 @@
 import { query } from '@/lib/db';
-import { getTasks, getOrders } from '@/lib/crud';
-import { formatTaskResponse, formatOrderResponse } from '@/lib/response-formatter';
+import { getTasks, getOrders, getOrderByOrderId } from '@/lib/crud';
+import { formatTaskResponse, formatOrderResponse, formatOrderDetailsResponse } from '@/lib/response-formatter';
+import { parseOrderNumberFromMessage, parseOrderMappingsFromMessage } from './utils';
 
 export async function handleGet(
   userNumber: string,
@@ -52,6 +53,55 @@ export async function handleGet(
     }
   } else if (analysis.entityType === 'order' || analysis.entityType === 'product') {
     try {
+      // Check if user is asking for details of a specific order
+      const orderId = analysis.parameters.orderId;
+      if (orderId) {
+        // User specified an order ID - get that specific order
+        const order = await getOrderByOrderId(userNumber, orderId);
+        if (order) {
+          return formatOrderDetailsResponse(order);
+        } else {
+          return `I couldn't find order ${orderId}. Please check the order ID and try again.`;
+        }
+      }
+      
+      // Check if user is asking for details using a number reference (e.g., "order 1", "details of order 2")
+      // This could be from a previous list context
+      // First get all orders to determine max number
+      const allOrdersForNumber = await getOrders(userNumber, { limit: 100 });
+      const orderNumber = parseOrderNumberFromMessage(body || '', allOrdersForNumber.orders.length);
+      if (orderNumber) {
+        // Try to find order from context mappings
+        const contextResult = await query(
+          'SELECT order_mappings FROM user_message_context WHERE user_number = $1',
+          [userNumber]
+        );
+        
+        if (contextResult.rows.length > 0 && contextResult.rows[0].order_mappings) {
+          const orderMappings = contextResult.rows[0].order_mappings;
+          const mappedOrderId = orderMappings[orderNumber];
+          
+          if (mappedOrderId) {
+            const order = await getOrderByOrderId(userNumber, mappedOrderId);
+            if (order) {
+              return formatOrderDetailsResponse(order);
+            }
+          }
+        }
+        
+        // If not found in mappings, try to get from recent orders list
+        const allOrders = await getOrders(userNumber, { limit: 100 });
+        if (allOrders.orders.length >= parseInt(orderNumber)) {
+          const order = allOrders.orders[parseInt(orderNumber) - 1];
+          if (order) {
+            return formatOrderDetailsResponse(order);
+          }
+        }
+        
+        return `I couldn't find order ${orderNumber}. Please specify the order ID (e.g., "ORD-123") or say "show my orders" first.`;
+      }
+      
+      // No specific order requested - show list of orders
       const filters: { dateRange?: string; limit?: number } = { limit: 5 };
       if (analysis.parameters.dateRange) {
         filters.dateRange = analysis.parameters.dateRange;

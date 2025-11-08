@@ -25,9 +25,18 @@ export async function handleCreate(
     }
   } else if (analysis.entityType === 'order' || analysis.entityType === 'product') {
     try {
-      // Check for potential duplicate orders (same product, quantity, and fulfillment date)
-      const productName = analysis.parameters.productName || 'Unknown Product';
-      const quantity = analysis.parameters.quantity || 1;
+      // Check if multiple items are provided
+      const items = analysis.parameters.items;
+      const hasMultipleItems = items && Array.isArray(items) && items.length > 0;
+      
+      // For single item, use productName and quantity
+      // For multiple items, use items array
+      const productName = hasMultipleItems 
+        ? items.map((item: any) => `${item.productName || 'Unknown'} x${item.quantity || 1}`).join(', ')
+        : (analysis.parameters.productName || 'Unknown Product');
+      const quantity = hasMultipleItems
+        ? items.reduce((sum: number, item: any) => sum + (item.quantity || 1), 0)
+        : (analysis.parameters.quantity || 1);
       const fulfillmentDate = analysis.parameters.fulfillmentDate;
       
       if (fulfillmentDate) {
@@ -96,9 +105,10 @@ export async function handleCreate(
         quantity,
         undefined, // orderId - will be auto-generated (ensures uniqueness)
         fulfillmentDate, // fulfillmentDate as string in correct position
-        body || '' // originalMessage
+        body || '', // originalMessage
+        hasMultipleItems ? items : undefined // items array if multiple items
       );
-      return formatCreateOrderResponse(order);
+      return formatCreateOrderResponse(order, hasMultipleItems ? items : undefined);
     } catch (error) {
       console.error('Error creating order:', error);
       return "I'm sorry, I couldn't create that order. Please try again.";

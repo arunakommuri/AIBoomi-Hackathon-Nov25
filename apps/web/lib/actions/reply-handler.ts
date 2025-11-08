@@ -1,6 +1,6 @@
 import { query } from '@/lib/db';
-import { updateTask, updateOrder } from '@/lib/crud';
-import { formatUpdateTaskResponse, formatUpdateOrderResponse } from '@/lib/response-formatter';
+import { updateTask, updateOrder, getOrderByOrderId } from '@/lib/crud';
+import { formatUpdateTaskResponse, formatUpdateOrderResponse, formatOrderDetailsResponse } from '@/lib/response-formatter';
 import { analyzeMessage } from '@/lib/gemini';
 import { parseOrderNumberFromMessage } from './utils';
 
@@ -25,11 +25,20 @@ export async function handleReply(
 
   try {
     const analysis = await analyzeMessage(body);
+    const lowerBody = body.toLowerCase();
+    
+    // Check if user is asking for details (even if intent is unknown)
+    const isDetailsRequest = 
+      lowerBody.includes('details') ||
+      lowerBody.includes('detail') ||
+      lowerBody.includes('information') ||
+      lowerBody.includes('info') ||
+      lowerBody.includes('tell me about') ||
+      lowerBody.includes('show') && (lowerBody.includes('order') || lowerBody.includes('task'));
     
     // Fallback: If intent is unknown but message contains status keywords, treat as update
     let effectiveAnalysis = analysis;
     if (analysis.intent === 'unknown' && context.entityType) {
-      const lowerBody = body.toLowerCase();
       const statusKeywords: Record<string, string> = {
         'done': 'completed',
         'complete': 'completed',
@@ -52,11 +61,26 @@ export async function handleReply(
           break;
         }
       }
+      
+      // If it's a details request, treat as get intent
+      if (effectiveAnalysis.intent === 'unknown' && isDetailsRequest) {
+        effectiveAnalysis = {
+          intent: 'get',
+          entityType: context.entityType as 'task' | 'order' | 'reminder' | 'product' | null,
+          parameters: analysis.parameters || {}
+        };
+      }
     }
     
     // Handle update intent with context
     if (effectiveAnalysis.intent === 'update' && context.entityType) {
       return await handleUpdateWithContext(userNumber, body, effectiveAnalysis, context);
+    }
+    
+    // Handle get intent with context (for order/task details)
+    // Also handle if it's a details request even if intent wasn't detected as "get"
+    if ((analysis.intent === 'get' || isDetailsRequest) && context.entityType) {
+      return await handleGetWithContext(userNumber, body, effectiveAnalysis.intent === 'get' ? analysis : effectiveAnalysis, context);
     }
     
     return null;
@@ -71,7 +95,7 @@ async function handleUpdateWithContext(
   body: string,
   analysis: any,
   context: MessageContext
-): Promise<string> {
+): Promise<string | null> {
   if (context.entityType === 'order' && context.orderIds && context.orderIds.length > 0) {
     let targetOrderIds: string[] = [];
     
@@ -188,6 +212,84 @@ async function handleUpdateWithContext(
     } else {
       return "What would you like to update about this task? (e.g., 'mark as completed', 'change title to...')";
     }
+  }
+  
+  return null;
+}
+
+async function handleGetWithContext(
+  userNumber: string,
+  body: string,
+  analysis: any,
+  context: MessageContext
+): Promise<string | null> {
+  if (context.entityType === 'order' && context.orderIds && context.orderIds.length > 0) {
+    let targetOrderId: string | null = null;
+    
+    console.log('Getting order details from reply context:', {
+      body,
+      orderIds: context.orderIds,
+      orderMappings: context.orderMappings,
+      analysisParams: analysis.parameters
+    });
+    
+    // First, check if analysis extracted an orderId
+    if (analysis.parameters?.orderId && context.orderMappings) {
+      const orderIdKey = analysis.parameters.orderId.toString();
+      const orderId = context.orderMappings[orderIdKey];
+      if (orderId) {
+        targetOrderId = orderId;
+        console.log('Found order ID from analysis parameters:', targetOrderId);
+      }
+    }
+    
+    // If not found, parse order number from user message (e.g., "5th", "order 5", "details of order 5")
+    if (!targetOrderId) {
+      const orderNumber = parseOrderNumberFromMessage(body, context.orderIds.length);
+      console.log('Parsed order number from message:', orderNumber);
+      
+      if (orderNumber !== null) {
+        if (context.orderMappings && Object.keys(context.orderMappings).length > 0) {
+          const orderIdKey = orderNumber.toString();
+          const orderId = context.orderMappings[orderIdKey];
+          if (orderId) {
+            targetOrderId = orderId;
+            console.log('Found order ID from mappings:', targetOrderId);
+          }
+        }
+        
+        // Fallback: use orderIds array index if mappings don't have it
+        if (!targetOrderId && orderNumber > 0 && orderNumber <= context.orderIds.length) {
+          targetOrderId = context.orderIds[orderNumber - 1];
+          console.log('Using order ID from array index:', targetOrderId);
+        }
+      }
+    }
+    
+    // If we found a target order, get its details
+    if (targetOrderId) {
+      try {
+        const order = await getOrderByOrderId(userNumber, targetOrderId);
+        if (order) {
+          console.log('Successfully retrieved order details:', order.order_id);
+          return formatOrderDetailsResponse(order);
+        } else {
+          console.log('Order not found in database:', targetOrderId);
+          return `I couldn't find order ${targetOrderId}. Please check the order ID and try again.`;
+        }
+      } catch (error) {
+        console.error('Error getting order details from reply:', error);
+        return "I'm sorry, I couldn't retrieve the order details. Please try again.";
+      }
+    } else {
+      // No specific order identified - could be asking for list
+      console.log('No target order ID found, returning null to let normal flow handle');
+      return null; // Let normal flow handle it
+    }
+  } else if (context.entityType === 'task' && context.taskIds && context.taskIds.length > 0) {
+    // Similar logic for tasks if needed in the future
+    // For now, return null to let normal flow handle task details
+    return null;
   }
   
   return null;

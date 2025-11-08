@@ -8,6 +8,11 @@ if (!apiKey) {
 
 const genAI = new GoogleGenerativeAI(apiKey);
 
+export interface OrderItem {
+  productName: string;
+  quantity: number;
+}
+
 export interface MessageAnalysis {
   intent: 'create' | 'get' | 'update' | 'unknown';
   entityType: 'task' | 'reminder' | 'order' | 'product' | null;
@@ -18,6 +23,7 @@ export interface MessageAnalysis {
     orderId?: string;
     productName?: string;
     quantity?: number;
+    items?: OrderItem[]; // Array of items for multiple products in a single order
     status?: string;
     taskId?: number;
     dateRange?: string; // e.g., "this week", "this month", "last week", "today", "yesterday"
@@ -41,8 +47,9 @@ Return ONLY a valid JSON object with this exact structure:
     "description": "string (optional, for tasks)",
     "dueDate": "string (optional, for tasks/reminders, can be relative like 'tomorrow', 'next week', or absolute date)",
     "orderId": "string (for orders, extract number/ID from message)",
-    "productName": "string (for orders/products)",
-    "quantity": number (for orders/products),
+    "productName": "string (for orders/products, use only if single item)",
+    "quantity": number (for orders/products, use only if single item),
+    "items": [{"productName": "string", "quantity": number}] (for orders with MULTIPLE items - ALWAYS use this if multiple products detected),
     "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled, e.g., 'tomorrow', 'next week', '15th November')",
     "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled')",
     "taskId": number (for task updates, extract ID from message),
@@ -58,8 +65,12 @@ IMPORTANT RULES:
   * "I need to..." → CREATE task (if it sounds like a task/reminder)
   * "Remind me to..." → CREATE reminder
   * "Order..." or "I want to order..." → CREATE order
-- Intent "get": User wants to view/list their tasks, reminders, or orders (e.g., "show my tasks", "list orders", "what are my reminders", "my tasks", "orders this week", "tasks this month")
+  * If message contains multiple items (e.g., "order 5 laptops and 3 mice", "pineapple cake, pastries, chocolate chips"), use "items" array with all products
+- Intent "get": User wants to view/list their tasks, reminders, or orders. This includes:
+  * "show my tasks", "list orders", "what are my reminders", "my tasks", "orders this week", "tasks this month" → GET list
+  * "show order details", "details of order ORD-123", "tell me about order 1", "what is order #123", "order information for ORD-123" → GET specific order details
   * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year"
+  * Extract orderId from messages like "order ORD-123", "order #123", "order 1" (if order ID is mentioned)
 - Intent "update": User wants to modify an existing task or order. This includes:
   * "mark task 1 as completed" → UPDATE task
   * "update order #123" → UPDATE order
@@ -260,6 +271,216 @@ Return ONLY the JSON object, no other text:`;
       bestMatch: null,
       allMatches: [],
       needsConfirmation: false,
+    };
+  }
+}
+
+/**
+ * Analyze an image using Gemini Vision API to extract information
+ * This can extract order information, task information, or any other relevant data from images
+ * 
+ * @param imageBuffer - Buffer containing the image data
+ * @param mimeType - MIME type of the image (e.g., 'image/jpeg', 'image/png')
+ * @param retryCount - Internal parameter for retry attempts (default: 0)
+ * @returns Extracted text and analysis of the image content
+ */
+export async function analyzeImage(
+  imageBuffer: Buffer,
+  mimeType: string = 'image/jpeg',
+  retryCount: number = 0
+): Promise<{ extractedText: string; analysis: MessageAnalysis }> {
+  const maxRetries = 3;
+  const baseDelay = 1000; // 1 second base delay
+  
+  try {
+    // Use a vision-capable model for image analysis
+    // Priority: GEMINI_IMAGE_MODEL > GEMINI_VISION_MODEL > default
+    // gemini-2.5-flash-image-preview is optimized for image analysis
+    // gemini-1.5-flash also supports vision but may be less optimized
+    let visionModelName = 
+      process.env.GEMINI_IMAGE_MODEL || 
+      process.env.GEMINI_VISION_MODEL || 
+      'gemini-1.5-flash';
+    
+    // If we're retrying due to quota error, try fallback model
+    if (retryCount > 0 && visionModelName.includes('2.5-flash-image-preview')) {
+      visionModelName = 'gemini-1.5-flash'; // Fallback to standard model
+      console.log(`Retrying with fallback model: ${visionModelName}`);
+    }
+    
+    const model = genAI.getGenerativeModel({ model: visionModelName });
+
+    const prompt = `Analyze this image and extract all relevant information. 
+
+If the image contains:
+- Products, items, shopping lists, or order information → Extract as ORDER/PRODUCT information
+- Tasks, reminders, appointments, or to-do items → Extract as TASK/REMINDER information
+- Text content → Extract the text
+- Multiple items → Extract ALL items (create a list)
+
+For ORDERS/PRODUCTS, extract:
+- Product names
+- Quantities
+- Any dates or deadlines
+- Order IDs if visible
+- Any other relevant order information
+
+For TASKS/REMINDERS, extract:
+- Task titles
+- Descriptions
+- Due dates or deadlines
+- Any other relevant task information
+
+Return a JSON object with this structure:
+{
+  "extractedText": "string (all text content visible in the image, or description of what's in the image)",
+  "intent": "create" | "get" | "update" | "unknown",
+  "entityType": "task" | "reminder" | "order" | "product" | null,
+  "parameters": {
+    "title": "string (for tasks/reminders)",
+    "description": "string (optional)",
+    "productName": "string (for orders/products, use ONLY if single item - if multiple items, use 'items' array instead)",
+    "quantity": number (for orders/products, use ONLY if single item - if multiple items, use 'items' array instead),
+    "items": [{"productName": "string", "quantity": number}] (REQUIRED if multiple products/items are detected - ALWAYS use this array when you see multiple distinct products),
+    "dueDate": "string (if any dates/deadlines are visible)",
+    "fulfillmentDate": "string (for orders, if deadline visible)",
+    "orderId": "string (if order ID visible)",
+    "status": "string (if status information visible)"
+  }
+}
+
+IMPORTANT:
+- If multiple items/products are visible (e.g., "pineapple cake", "pastries", "chocolate chips"), ALWAYS use the "items" array
+- DO NOT use "productName" and "quantity" if multiple items are detected - use "items" array instead
+- Extract ALL items with their quantities separately
+- Extract ALL text visible in the image
+- Be specific about quantities and product names
+- If dates are visible, extract them in a readable format
+- Example: If image shows "pineapple cake 1kg, pastries 4 slices, chocolate chips 1kg", return:
+  {
+    "items": [
+      {"productName": "pineapple cake", "quantity": 1},
+      {"productName": "pastries", "quantity": 4},
+      {"productName": "chocolate chips", "quantity": 1}
+    ]
+  }
+
+Return ONLY the JSON object, no other text:`;
+
+    // Use vision API with image
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: imageBuffer.toString('base64'),
+          mimeType: mimeType,
+        },
+      },
+    ]);
+
+    const response = await result.response;
+    const text = response.text();
+
+    // Extract JSON from response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error('No JSON found in Gemini image analysis response:', text);
+      return {
+        extractedText: text || 'Could not extract information from image',
+        analysis: {
+          intent: 'unknown',
+          entityType: null,
+          parameters: {},
+        },
+      };
+    }
+
+    const imageData = JSON.parse(jsonMatch[0]) as {
+      extractedText: string;
+      intent?: string;
+      entityType?: string;
+      parameters?: any;
+    };
+
+    // Build the analysis object
+    const analysis: MessageAnalysis = {
+      intent: (imageData.intent as any) || 'create',
+      entityType: (imageData.entityType as any) || null,
+      parameters: imageData.parameters || {},
+    };
+
+    // Validate intent
+    if (!['create', 'get', 'update', 'unknown'].includes(analysis.intent)) {
+      analysis.intent = 'create'; // Default to create for images
+    }
+
+    // Validate entity type
+    if (analysis.entityType && !['task', 'reminder', 'order', 'product'].includes(analysis.entityType)) {
+      analysis.entityType = null;
+    }
+
+    return {
+      extractedText: imageData.extractedText || text || 'Could not extract information from image',
+      analysis,
+    };
+  } catch (error: any) {
+    // Check if it's a rate limit/quota error
+    const isRateLimitError = 
+      error?.status === 429 || 
+      error?.message?.includes('429') ||
+      error?.message?.includes('quota') ||
+      error?.message?.includes('rate limit') ||
+      error?.errorDetails?.some((detail: any) => 
+        detail['@type']?.includes('QuotaFailure') || 
+        detail['@type']?.includes('RetryInfo')
+      );
+
+    if (isRateLimitError && retryCount < maxRetries) {
+      // Extract retry delay from error if available
+      let retryDelay = baseDelay * Math.pow(2, retryCount); // Exponential backoff
+      
+      const retryInfo = error?.errorDetails?.find((detail: any) => 
+        detail['@type']?.includes('RetryInfo')
+      );
+      if (retryInfo?.retryDelay) {
+        // Parse retry delay (e.g., "11s" or "11.4s")
+        const delayMatch = retryInfo.retryDelay.match(/(\d+\.?\d*)/);
+        if (delayMatch) {
+          retryDelay = parseFloat(delayMatch[1]) * 1000; // Convert to milliseconds
+        }
+      }
+
+      console.log(`Rate limit/quota error. Retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})...`);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      
+      // Retry with incremented count
+      return analyzeImage(imageBuffer, mimeType, retryCount + 1);
+    }
+
+    // If it's a rate limit error but we've exhausted retries, provide helpful message
+    if (isRateLimitError) {
+      console.error('Gemini API quota/rate limit exceeded after retries:', error);
+      return {
+        extractedText: 'I\'m currently experiencing high demand. Please try again in a few moments, or describe what\'s in the image in a text message.',
+        analysis: {
+          intent: 'unknown',
+          entityType: null,
+          parameters: {},
+        },
+      };
+    }
+
+    // For other errors, log and return error message
+    console.error('Error analyzing image with Gemini:', error);
+    return {
+      extractedText: 'I had trouble analyzing the image. Please try sending a text description instead.',
+      analysis: {
+        intent: 'unknown',
+        entityType: null,
+        parameters: {},
+      },
     };
   }
 }

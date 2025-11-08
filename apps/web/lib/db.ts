@@ -203,6 +203,21 @@ export async function initializeSchema(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_number)`
     );
 
+    // Create order_items table for multiple items in a single order
+    await query(
+      `CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+        product_name VARCHAR(500) NOT NULL,
+        quantity INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`
+    );
+
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)`
+    );
+
     console.log('Database schema initialized successfully');
   } catch (error) {
     console.error('Error initializing database schema:', error);

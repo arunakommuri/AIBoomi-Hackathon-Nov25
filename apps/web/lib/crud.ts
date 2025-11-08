@@ -318,16 +318,31 @@ export async function updateTask(
 }
 
 // Order Operations
+export interface OrderItem {
+  productName: string;
+  quantity: number;
+}
+
 export async function createOrder(
   userNumber: string,
   productName: string,
   quantity: number = 1,
   orderId?: string,
   fulfillmentDate?: string,
-  originalMessage?: string
+  originalMessage?: string,
+  items?: OrderItem[] // Array of items for multiple products
 ): Promise<Order> {
   // Generate order ID if not provided
   const finalOrderId = orderId || `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // If items array is provided, use the first item's name and total quantity for the main order record
+  // The individual items will be stored in order_items table
+  const mainProductName = items && items.length > 0 
+    ? items.map(item => `${item.productName} x${item.quantity}`).join(', ')
+    : productName;
+  const totalQuantity = items && items.length > 0
+    ? items.reduce((sum, item) => sum + item.quantity, 0)
+    : quantity;
 
   // Parse fulfillment date if provided (similar to task due date parsing)
   let parsedFulfillmentDate: Date | null = null;
@@ -465,14 +480,123 @@ export async function createOrder(
     }
   }
 
+  // If no fulfillment date was provided or could not be parsed, set to current time + 5 hours
+  if (!parsedFulfillmentDate) {
+    const now = new Date();
+    parsedFulfillmentDate = new Date(now.getTime() + 5 * 60 * 60 * 1000); // Add 5 hours (5 * 60 minutes * 60 seconds * 1000 milliseconds)
+    console.log('No fulfillment date provided, setting to 5 hours from now:', parsedFulfillmentDate);
+  }
+
   const result = await query(
     `INSERT INTO orders (user_number, order_id, product_name, quantity, status, fulfillment_date, original_message)
      VALUES ($1, $2, $3, $4, 'pending', $5, $6)
      RETURNING *`,
-    [userNumber, finalOrderId, productName, quantity, parsedFulfillmentDate, originalMessage || null]
+    [userNumber, finalOrderId, mainProductName, totalQuantity, parsedFulfillmentDate, originalMessage || null]
   );
 
-  return result.rows[0];
+  const order = result.rows[0];
+
+  // If items array is provided, create order_items records
+  if (items && items.length > 0) {
+    for (const item of items) {
+      await query(
+        `INSERT INTO order_items (order_id, product_name, quantity)
+         VALUES ($1, $2, $3)`,
+        [order.id, item.productName, item.quantity]
+      );
+    }
+  } else {
+    // If no items array, create a single order_item for backward compatibility
+    await query(
+      `INSERT INTO order_items (order_id, product_name, quantity)
+       VALUES ($1, $2, $3)`,
+      [order.id, productName, quantity]
+    );
+  }
+
+  return order;
+}
+
+/**
+ * Get order items for a specific order
+ */
+export async function getOrderItems(orderId: number): Promise<OrderItem[]> {
+  try {
+    const result = await query(
+      'SELECT product_name, quantity FROM order_items WHERE order_id = $1 ORDER BY id',
+      [orderId]
+    );
+    return result.rows.map(row => ({
+      productName: row.product_name,
+      quantity: row.quantity
+    }));
+  } catch (error) {
+    console.error('Error getting order items:', error);
+    return [];
+  }
+}
+
+/**
+ * Get a single order by order ID
+ * Also tries to find the original message with media information
+ */
+export async function getOrderByOrderId(
+  userNumber: string,
+  orderId: string
+): Promise<Order & { mediaInfo?: { url?: string; type?: string; extractedText?: string }; items?: OrderItem[] } | null> {
+  try {
+    const result = await query(
+      'SELECT * FROM orders WHERE user_number = $1 AND order_id = $2',
+      [userNumber, orderId]
+    );
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    const order = result.rows[0];
+    
+    // Get order items
+    const orderItems = await getOrderItems(order.id);
+    if (orderItems.length > 0) {
+      order.items = orderItems;
+    }
+    
+    // Try to find the original message with media information
+    if (order.original_message) {
+      try {
+        const messageResult = await query(
+          `SELECT media_url, media_type, extracted_text 
+           FROM messages 
+           WHERE from_number = $1 
+           AND body = $2 
+           AND media_url IS NOT NULL
+           ORDER BY created_at DESC 
+           LIMIT 1`,
+          [userNumber, order.original_message]
+        );
+        
+        if (messageResult.rows.length > 0) {
+          return {
+            ...order,
+            mediaInfo: {
+              url: messageResult.rows[0].media_url,
+              type: messageResult.rows[0].media_type,
+              extractedText: messageResult.rows[0].extracted_text,
+            },
+          };
+        }
+      } catch (mediaError) {
+        console.error('Error fetching media info for order:', mediaError);
+        // Continue without media info
+      }
+    }
+    
+    return order;
+  } catch (error) {
+    console.error('Error getting order by order ID:', error);
+    return null;
+  }
 }
 
 export async function getOrders(
