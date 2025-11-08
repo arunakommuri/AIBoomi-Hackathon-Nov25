@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bash scripts/start-with-cron.sh dev",
+    "dev:direct": "next dev",
+    "start": "bash scripts/start-with-cron.sh start",
+    "start:direct": "next start",
     "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "cron:setup": "node scripts/cron-manager.js setup",
+    "cron:remove": "node scripts/cron-manager.js remove"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

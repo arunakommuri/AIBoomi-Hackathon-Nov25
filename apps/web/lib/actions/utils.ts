@@ -1,4 +1,50 @@
-// Helper function to parse order/task number from user message
+// Helper function to parse multiple order/task numbers from user message
+// Handles: "1 2 3", "1,2,3", "1, 2, 3", "1 and 2", etc.
+export function parseMultipleOrderNumbersFromMessage(message: string, maxNumber: number): number[] {
+  const numbers: number[] = [];
+  const lowerMessage = message.toLowerCase().trim();
+  
+  // Try to extract all numbers from the message
+  // Pattern: matches numbers separated by spaces, commas, "and", etc.
+  const numberPatterns = [
+    /(\d+)/g, // Simple: just extract all numbers
+  ];
+  
+  for (const pattern of numberPatterns) {
+    const matches = lowerMessage.matchAll(pattern);
+    for (const match of matches) {
+      const num = parseInt(match[1]);
+      if (num > 0 && num <= maxNumber && !numbers.includes(num)) {
+        numbers.push(num);
+      }
+    }
+  }
+  
+  // Also check for ordinal words
+  const ordinalWords: Record<string, number> = {
+    'first': 1, '1st': 1,
+    'second': 2, '2nd': 2,
+    'third': 3, '3rd': 3,
+    'fourth': 4, '4th': 4,
+    'fifth': 5, '5th': 5,
+    'sixth': 6, '6th': 6,
+    'seventh': 7, '7th': 7,
+    'eighth': 8, '8th': 8,
+    'ninth': 9, '9th': 9,
+    'tenth': 10, '10th': 10
+  };
+  
+  for (const [word, num] of Object.entries(ordinalWords)) {
+    const wordRegex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (wordRegex.test(lowerMessage) && num <= maxNumber && !numbers.includes(num)) {
+      numbers.push(num);
+    }
+  }
+  
+  return numbers.sort((a, b) => a - b); // Return sorted unique numbers
+}
+
+// Helper function to parse order/task number from user message (single number)
 // Handles: "3rd order", "first order", "order 2", "2", "third", etc.
 export function parseOrderNumberFromMessage(message: string, maxNumber: number): number | null {
   const lowerMessage = message.toLowerCase();

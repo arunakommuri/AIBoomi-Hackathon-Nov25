@@ -70,6 +70,12 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 # Next.js
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Order Reminder Configuration
+ORDER_REMINDER_INTERVAL_MINUTES=360
+
+# Cron Job Security (optional)
+CRON_SECRET_TOKEN=your_secret_token_here
 ```
 
 Replace the credentials with your actual values:
@@ -107,6 +113,7 @@ The application will be available at `http://localhost:3000`
 - ✅ Automatic message storage in database
 - ✅ Intelligent CRUD operations for Tasks/Reminders and Orders/Products
 - ✅ Natural language understanding and response generation
+- ✅ Automated pending order reminders (configurable interval)
 
 ### How It Works
 
@@ -146,6 +153,73 @@ Twilio webhook endpoint that receives incoming WhatsApp messages.
 - `MessageSid`: Unique message identifier
 
 **Response:** TwiML XML response with the bot's reply
+
+### GET/POST `/api/cron/order-reminders`
+
+Cron job endpoint for sending pending order reminders to users.
+
+**Authentication:** Optional - set `CRON_SECRET_TOKEN` environment variable and include it in the request:
+- Header: `Authorization: Bearer <token>` or
+- Query parameter: `?token=<token>`
+
+**Response:** JSON with success status and statistics:
+```json
+{
+  "success": true,
+  "message": "Order reminders sent",
+  "stats": {
+    "successCount": 5,
+    "errorCount": 0,
+    "totalUsers": 5,
+    "duration": "1234ms"
+  }
+}
+```
+
+**Setup:**
+1. Set `ORDER_REMINDER_INTERVAL_MINUTES` in your `.env.local` file (default: 360 minutes = 6 hours)
+2. Run the setup script to configure the cron job based on the environment variable:
+   ```bash
+   cd apps/web
+   bash scripts/setup-order-reminder-cron.sh
+   ```
+   This script will:
+   - Read `ORDER_REMINDER_INTERVAL_MINUTES` from `.env.local`
+   - Remove any existing order-reminder cron jobs
+   - Set up a new cron job with the correct schedule
+3. (Optional) Set `CRON_SECRET_TOKEN` for security
+
+**Note:** The cron schedule is automatically calculated from `ORDER_REMINDER_INTERVAL_MINUTES`:
+- Less than 60 minutes: Runs every X minutes (e.g., `*/30 * * * *` for 30 minutes)
+- Exactly 60 minutes: Runs every hour at :00 (e.g., `0 * * * *`)
+- Multiple of 60: Runs every X hours at :00 (e.g., `0 */6 * * *` for 6 hours)
+- Other values: Runs every X minutes (e.g., `*/90 * * * *` for 90 minutes)
+
+**Example cron schedules:**
+- Every 6 hours (360 minutes): `0 */6 * * *` (runs at 00:00, 06:00, 12:00, 18:00)
+- Every 12 hours (720 minutes): `0 */12 * * *` (runs at 00:00, 12:00)
+- Every 4 hours (240 minutes): `0 */4 * * *`
+- Every 30 minutes: `*/30 * * * *` (runs every 30 minutes)
+- Every 1 hour (60 minutes): `0 * * * *` (runs at the top of every hour)
+- Every 15 minutes: `*/15 * * * *` (runs every 15 minutes)
+
+**For Vercel deployments:**
+Add to `vercel.json`:
+```json
+{
+  "crons": [{
+    "path": "/api/cron/order-reminders",
+    "schedule": "0 */6 * * *"
+  }]
+}
+```
+
+**For other platforms:**
+Use external cron services like:
+- [cron-job.org](https://cron-job.org/)
+- [EasyCron](https://www.easycron.com/)
+- GitHub Actions scheduled workflows
+- Your server's cron daemon
 
 ## Database Schema
 

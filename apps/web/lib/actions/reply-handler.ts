@@ -2,7 +2,7 @@ import { query } from '@/lib/db';
 import { updateTask, updateOrder, getOrderByOrderId } from '@/lib/crud';
 import { formatUpdateTaskResponse, formatUpdateOrderResponse, formatOrderDetailsResponse } from '@/lib/response-formatter';
 import { analyzeMessage } from '@/lib/gemini';
-import { parseOrderNumberFromMessage } from './utils';
+import { parseOrderNumberFromMessage, parseMultipleOrderNumbersFromMessage } from './utils';
 
 export interface MessageContext {
   entityType: string | null;
@@ -108,7 +108,31 @@ async function handleUpdateWithContext(
       }
     }
     
-    // If not found, parse order number from user message
+    // If not found, try to parse multiple order numbers from user message
+    // This handles replies like "1 2 3", "1,2,3", etc.
+    if (targetOrderIds.length === 0) {
+      const orderNumbers = parseMultipleOrderNumbersFromMessage(body, context.orderIds.length);
+      
+      if (orderNumbers.length > 0 && context.orderMappings) {
+        // Map order numbers to order IDs
+        for (const orderNumber of orderNumbers) {
+          const orderIdKey = orderNumber.toString();
+          const orderId = context.orderMappings[orderIdKey];
+          if (orderId && !targetOrderIds.includes(orderId)) {
+            targetOrderIds.push(orderId);
+          } else {
+            // Fallback: use orderIds array index
+            if (orderNumber > 0 && orderNumber <= context.orderIds.length) {
+              const fallbackOrderId = context.orderIds[orderNumber - 1];
+              if (!targetOrderIds.includes(fallbackOrderId)) {
+                targetOrderIds.push(fallbackOrderId);
+              }
+            }
+          }
+        }
+      }
+      
+      // If still no numbers found, try single number parsing (backward compatibility)
     if (targetOrderIds.length === 0) {
       const orderNumber = parseOrderNumberFromMessage(body, context.orderIds.length);
       
@@ -121,6 +145,7 @@ async function handleUpdateWithContext(
           // Fallback: use orderIds array index
           if (orderNumber > 0 && orderNumber <= context.orderIds.length) {
             targetOrderIds = [context.orderIds[orderNumber - 1]];
+            }
           }
         }
       }
