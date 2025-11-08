@@ -102,6 +102,53 @@ export function parseDateRange(dateRange: string): DateRange {
     };
   }
 
+  if (lowerRange === 'tomorrow') {
+    // Start from beginning of tomorrow (00:00:00), end at end of tomorrow
+    // Do NOT include today's remaining orders
+    const startOfTomorrow = new Date(startOfToday);
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+    startOfTomorrow.setHours(0, 0, 0, 0);
+    
+    const endOfTomorrow = new Date(startOfTomorrow);
+    endOfTomorrow.setHours(23, 59, 59, 999);
+    return {
+      startDate: startOfTomorrow, // Start from beginning of tomorrow
+      endDate: endOfTomorrow,
+    };
+  }
+
+  if (lowerRange === 'next week') {
+    // Start from beginning of next week's Monday (00:00:00), end at end of next week (Sunday)
+    // Do NOT include today's remaining orders or this week's remaining orders
+    const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    // Calculate next week's Monday
+    const nextWeekMonday = new Date(startOfToday);
+    nextWeekMonday.setDate(nextWeekMonday.getDate() - daysToMonday + 7);
+    nextWeekMonday.setHours(0, 0, 0, 0);
+    
+    // End of next week is Sunday (6 days after Monday)
+    const endOfNextWeek = new Date(nextWeekMonday);
+    endOfNextWeek.setDate(nextWeekMonday.getDate() + 6);
+    endOfNextWeek.setHours(23, 59, 59, 999);
+    
+    return {
+      startDate: nextWeekMonday, // Start from beginning of next week's Monday
+      endDate: endOfNextWeek,
+    };
+  }
+
+  if (lowerRange === 'next month') {
+    // Start from current datetime, end at end of next month
+    const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const endOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
+    
+    return {
+      startDate: now, // Start from current datetime
+      endDate: endOfNextMonth,
+    };
+  }
+
   // Default: no date range
   return {
     startDate: null,

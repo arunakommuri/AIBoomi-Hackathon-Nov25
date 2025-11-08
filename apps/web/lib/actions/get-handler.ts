@@ -102,10 +102,23 @@ export async function handleGet(
       }
       
       // No specific order requested - show list of orders
-      const filters: { dateRange?: string; limit?: number } = { limit: 5 };
+      const filters: { status?: string; dateRange?: string; limit?: number } = { limit: 5 };
+      
+      // Extract status filter (e.g., "pending orders", "completed orders")
+      if (analysis.parameters.status) {
+        const status = analysis.parameters.status.toLowerCase();
+        // Validate status values
+        const validStatuses = ['pending', 'completed', 'processing', 'cancelled'];
+        if (validStatuses.includes(status)) {
+          filters.status = status;
+        }
+      }
+      
+      // Extract date range filter (e.g., "orders today", "orders this week")
       if (analysis.parameters.dateRange) {
         filters.dateRange = analysis.parameters.dateRange;
       }
+      
       const result = await getOrders(userNumber, filters);
       
       // Store pagination state if there are more orders
@@ -120,7 +133,7 @@ export async function handleGet(
         await query('DELETE FROM pagination_state WHERE user_number = $1 AND entity_type = $2', [userNumber, 'order']);
       }
       
-      const responseMessage = formatOrderResponse(result.orders, result.total, 0);
+      const responseMessage = formatOrderResponse(result.orders, result.total, 0, filters);
       
       // Store context for replies with order mappings
       const orderIds = result.orders.map(o => o.order_id || o.id.toString());

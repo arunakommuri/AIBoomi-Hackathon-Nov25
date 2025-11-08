@@ -51,9 +51,9 @@ Return ONLY a valid JSON object with this exact structure:
     "quantity": number (for orders/products, use only if single item),
     "items": [{"productName": "string", "quantity": number}] (for orders with MULTIPLE items - ALWAYS use this if multiple products detected),
     "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled, e.g., 'tomorrow', 'next week', '15th November')",
-    "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled')",
+    "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled'. For get intent: extract status filter like 'pending', 'completed', 'processing', 'cancelled' when user asks for 'pending orders', 'completed orders', etc.)",
     "taskId": number (for task updates, extract ID from message),
-    "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', etc.)"
+    "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', 'next week', 'next month', 'tomorrow', etc.)"
   }
 }
 
@@ -69,7 +69,10 @@ IMPORTANT RULES:
 - Intent "get": User wants to view/list their tasks, reminders, or orders. This includes:
   * "show my tasks", "list orders", "what are my reminders", "my tasks", "orders this week", "tasks this month" → GET list
   * "show order details", "details of order ORD-123", "tell me about order 1", "what is order #123", "order information for ORD-123" → GET specific order details
-  * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year"
+  * "pending orders", "completed orders", "processing orders", "cancelled orders" → GET with status filter
+  * "orders today", "orders tomorrow", "orders this week", "orders next week", "orders this month", "orders next month" → GET with dateRange filter
+  * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year", "next week", "next month", "tomorrow"
+  * Extract status from phrases like "pending", "completed", "processing", "cancelled" when used with orders/tasks
   * Extract orderId from messages like "order ORD-123", "order #123", "order 1" (if order ID is mentioned)
 - Intent "update": User wants to modify an existing task or order. This includes:
   * "mark task 1 as completed" → UPDATE task

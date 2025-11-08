@@ -1,5 +1,24 @@
 import { Task, Order } from './crud';
 
+/**
+ * Get status-specific emoji for orders
+ */
+function getStatusEmoji(status: string): string {
+  const lowerStatus = status.toLowerCase();
+  switch (lowerStatus) {
+    case 'completed':
+      return '✅';
+    case 'pending':
+      return '⏳';
+    case 'processing':
+      return '🔄';
+    case 'cancelled':
+      return '❌';
+    default:
+      return '📊';
+  }
+}
+
 export function formatTaskResponse(tasks: Task[], total?: number, offset?: number): string {
   if (tasks.length === 0) {
     return "You don't have any tasks yet.";
@@ -32,37 +51,66 @@ export function formatTaskResponse(tasks: Task[], total?: number, offset?: numbe
   return response.trim();
 }
 
-export function formatOrderResponse(orders: Order[], total?: number, offset?: number): string {
+export function formatOrderResponse(orders: Order[], total?: number, offset?: number, filters?: { status?: string; dateRange?: string }): string {
   if (orders.length === 0) {
+    // Provide helpful message based on filters
+    if (filters?.status) {
+      return `You don't have any ${filters.status} orders.`;
+    }
+    if (filters?.dateRange) {
+      return `You don't have any orders for ${filters.dateRange}.`;
+    }
     return "You don't have any orders yet.";
   }
 
   if (orders.length === 1 && !total) {
     const order = orders[0];
-    // Access fulfillment_date - handle both Date objects and string dates from PostgreSQL
     const fulfillmentDate = order.fulfillment_date;
     const dateStr = fulfillmentDate != null
-      ? ` - Fulfill by: ${formatDate(fulfillmentDate)}`
-      : '';
-    return `Order ${order.order_id || order.id}: ${order.product_name} x${order.quantity} (${order.status})${dateStr}`;
+      ? formatDate(fulfillmentDate)
+      : 'No date set';
+    const statusEmoji = getStatusEmoji(order.status);
+    return `📅 ${dateStr}\n📦 ${order.product_name} x${order.quantity}\n${statusEmoji} ${order.status}\n🆔 ${order.order_id || order.id}`;
   }
 
   const showingCount = orders.length;
   const remaining = total !== undefined ? total - (offset || 0) - showingCount : 0;
   
-  let response = `You have ${total !== undefined ? total : showingCount} order${total !== undefined && total !== 1 ? 's' : ''}:\n\n`;
+  // Build header message with filter info
+  let header = `📋 You have ${total !== undefined ? total : showingCount} order${total !== undefined && total !== 1 ? 's' : ''}`;
+  if (filters?.status) {
+    header += ` (${filters.status})`;
+  }
+  if (filters?.dateRange) {
+    header += ` for ${filters.dateRange}`;
+  }
+  header += `:\n\n`;
+  
+  let response = header;
   orders.forEach((order, index) => {
-    // Access fulfillment_date - handle both Date objects and string dates from PostgreSQL
     const fulfillmentDate = order.fulfillment_date;
     const dateStr = fulfillmentDate != null
-      ? ` - Fulfill by: ${formatDate(fulfillmentDate)}`
-      : ' - No fulfillment date';
+      ? formatDate(fulfillmentDate)
+      : 'No date set';
     const itemNumber = (offset || 0) + index + 1;
-    response += `${itemNumber}. Order ${order.order_id || order.id}: ${order.product_name} x${order.quantity} (${order.status})${dateStr}\n`;
+    
+    // Clean, mobile-friendly format:
+    // Number. Date (most important first)
+    //    Product x Quantity | Status (with emoji)
+    //    Order ID (at the end, less prominent)
+    const statusEmoji = getStatusEmoji(order.status);
+    response += `${itemNumber}. 📅 ${dateStr}\n`;
+    response += `   📦 ${order.product_name} x${order.quantity} | ${statusEmoji} ${order.status}\n`;
+    response += `   🆔 ${order.order_id || order.id}\n`;
+    
+    // Add spacing between orders (except for last one)
+    if (index < orders.length - 1) {
+      response += `\n`;
+    }
   });
 
   if (remaining > 0) {
-    response += `\n\nThere are ${remaining} more order${remaining !== 1 ? 's' : ''}. Would you like to see the next 5? Reply "next" to continue.`;
+    response += `\n\n📄 There are ${remaining} more order${remaining !== 1 ? 's' : ''}. Reply "next" to continue.`;
   }
 
   return response.trim();
@@ -97,7 +145,8 @@ export function formatUpdateTaskResponse(task: Task): string {
 }
 
 export function formatUpdateOrderResponse(order: Order): string {
-  return `Order ${order.order_id || order.id} has been updated. Status: ${order.status}`;
+  const statusEmoji = getStatusEmoji(order.status);
+  return `Order ${order.order_id || order.id} has been updated. Status: ${statusEmoji} ${order.status}`;
 }
 
 export function formatOrderDetailsResponse(order: Order & { mediaInfo?: { url?: string; type?: string; extractedText?: string }; items?: Array<{productName: string; quantity: number}> }): string {
@@ -128,7 +177,8 @@ export function formatOrderDetailsResponse(order: Order & { mediaInfo?: { url?: 
     response += `Quantity: ${order.quantity}\n`;
   }
   
-  response += `Status: ${order.status}\n`;
+  const statusEmoji = getStatusEmoji(order.status);
+  response += `Status: ${statusEmoji} ${order.status}\n`;
   response += `Fulfillment Date: ${fulfillmentDate}\n`;
   response += `Created: ${createdDate}\n`;
   response += `Last Updated: ${updatedDate}\n`;
@@ -158,9 +208,9 @@ export function formatDate(date: Date | string): string {
     return '';
   }
   
-  // Always format as absolute date-time value (MM/DD/YYYY HH:MM AM/PM)
-  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  // Format as DD/MM/YYYY HH:MM AM/PM (day first, then month)
   const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
   const year = d.getFullYear();
   
   const hours = d.getHours();
@@ -172,7 +222,7 @@ export function formatDate(date: Date | string): string {
   const formattedHours = displayHours.toString().padStart(2, '0');
   const formattedMinutes = minutes.toString().padStart(2, '0');
   
-  return `${month}/${day}/${year} ${formattedHours}:${formattedMinutes} ${period}`;
+  return `${day}/${month}/${year} ${formattedHours}:${formattedMinutes} ${period}`;
 }
 
 
