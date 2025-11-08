@@ -27,6 +27,7 @@ export interface MessageAnalysis {
     status?: string;
     taskId?: number;
     dateRange?: string; // e.g., "this week", "this month", "last week", "today", "yesterday"
+    summary?: boolean; // true if user wants order summary
     [key: string]: any;
   };
 }
@@ -53,7 +54,10 @@ Return ONLY a valid JSON object with this exact structure:
     "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled, e.g., 'tomorrow', 'next week', '15th November')",
     "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled'. For get intent: extract status filter like 'pending', 'completed', 'processing', 'cancelled' when user asks for 'pending orders', 'completed orders', etc.)",
     "taskId": number (for task updates, extract ID from message),
-    "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', 'next week', 'next month', 'tomorrow', etc.)"
+    "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', 'next week', 'next month', 'tomorrow', etc. For bulk updates: extract date range when user says 'all today's', 'all yesterday's', 'all this week's', etc.)",
+    "summary": boolean (for get intent: set to true if user asks for order summary/summaries),
+    "isBulkUpdate": boolean (set to true if message contains bulk update keywords like 'all', 'every', 'all of', 'all my', 'all today's', etc.),
+    "statusFilter": "string (for bulk updates: extract the status filter when user says 'all pending orders', 'all completed tasks', etc. - this is the CURRENT status to filter by, not the new status to set)"
   }
 }
 
@@ -71,9 +75,11 @@ IMPORTANT RULES:
   * "show order details", "details of order ORD-123", "tell me about order 1", "what is order #123", "order information for ORD-123" → GET specific order details
   * "pending orders", "completed orders", "processing orders", "cancelled orders" → GET with status filter
   * "orders today", "orders tomorrow", "orders this week", "orders next week", "orders this month", "orders next month" → GET with dateRange filter
+  * "order summary", "order summaries", "summary of orders", "orders summary for today/tomorrow/this week/next week/this month" → GET with summary=true and dateRange filter
   * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year", "next week", "next month", "tomorrow"
   * Extract status from phrases like "pending", "completed", "processing", "cancelled" when used with orders/tasks
   * Extract orderId from messages like "order ORD-123", "order #123", "order 1" (if order ID is mentioned)
+  * If message contains "summary" or "summaries" with "order", set parameters.summary = true
 - Intent "update": User wants to modify an existing task or order. This includes:
   * "mark task 1 as completed" → UPDATE task
   * "update order #123" → UPDATE order
@@ -86,6 +92,16 @@ IMPORTANT RULES:
   * "done" → UPDATE (status: completed)
   * "complete" → UPDATE (status: completed)
   * Any message containing status words like "done", "completed", "processing", "cancelled", "pending" when referring to existing items
+  * BULK UPDATES: If message contains "all", "every", "all of", "all my", "all today's", "all yesterday's", "all this week's", etc., this is a BULK UPDATE:
+    - "mark all today's orders as done" → UPDATE with dateRange: "today", status: "completed"
+    - "update all pending orders to completed" → UPDATE with status filter: "pending", status: "completed"
+    - "mark all tasks from this week as done" → UPDATE with dateRange: "this week", status: "completed"
+    - "update all orders from yesterday" → UPDATE with dateRange: "yesterday"
+    - "mark all my orders as done" → UPDATE (no filters, updates all orders)
+    - "update all pending tasks to completed" → UPDATE with status filter: "pending", status: "completed"
+    - For bulk updates, ALWAYS extract dateRange if mentioned (e.g., "today", "yesterday", "this week", "this month", "last week", "last month")
+    - For bulk updates, extract status filter if mentioned (e.g., "all pending orders" → status filter: "pending")
+    - Set parameters.isBulkUpdate = true if bulk update is detected
 - Intent "unknown": Only use if truly cannot determine intent
 
 Entity Type Rules:
@@ -107,6 +123,10 @@ Examples:
 - "Have an appointment at 2PM on Saturday 15th November" → {"intent": "create", "entityType": "task", "parameters": {"title": "Appointment", "dueDate": "Saturday 15th November 2PM"}}
 - "Add appointment at 2PM on Saturday 15th November" → {"intent": "create", "entityType": "task", "parameters": {"title": "Appointment", "dueDate": "Saturday 15th November 2PM"}}
 - "Create a task to buy groceries tomorrow" → {"intent": "create", "entityType": "task", "parameters": {"title": "buy groceries", "dueDate": "tomorrow"}}
+- "mark all today's orders as done" → {"intent": "update", "entityType": "order", "parameters": {"status": "completed", "dateRange": "today", "isBulkUpdate": true}}
+- "update all pending orders to completed" → {"intent": "update", "entityType": "order", "parameters": {"status": "completed", "statusFilter": "pending", "isBulkUpdate": true}}
+- "mark all tasks from this week as done" → {"intent": "update", "entityType": "task", "parameters": {"status": "completed", "dateRange": "this week", "isBulkUpdate": true}}
+- "update all my orders as done" → {"intent": "update", "entityType": "order", "parameters": {"status": "completed", "isBulkUpdate": true}}
 
 Message: "${message}"
 

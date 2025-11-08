@@ -1,6 +1,6 @@
 import { query } from '@/lib/db';
-import { getTasks, updateTask, updateOrder } from '@/lib/crud';
-import { formatUpdateTaskResponse, formatUpdateOrderResponse } from '@/lib/response-formatter';
+import { getTasks, updateTask, updateOrder, bulkUpdateTasks, bulkUpdateOrders } from '@/lib/crud';
+import { formatUpdateTaskResponse, formatUpdateOrderResponse, formatBulkUpdateResponse } from '@/lib/response-formatter';
 import { findMatchingTask } from '@/lib/gemini';
 
 export async function handleUpdate(
@@ -8,7 +8,54 @@ export async function handleUpdate(
   analysis: any,
   body?: string
 ): Promise<string> {
+  // Check if this is a bulk update
+  const isBulkUpdate = analysis.parameters?.isBulkUpdate === true;
+
   if (analysis.entityType === 'task' || analysis.entityType === 'reminder') {
+    // Handle bulk update for tasks
+    if (isBulkUpdate) {
+      try {
+        const updates: any = {};
+        if (analysis.parameters.status) updates.status = analysis.parameters.status;
+        if (analysis.parameters.title) updates.title = analysis.parameters.title;
+        if (analysis.parameters.description !== undefined) {
+          updates.description = analysis.parameters.description;
+        }
+        if (analysis.parameters.dueDate) {
+          updates.dueDate = parseDate(analysis.parameters.dueDate);
+        }
+
+        if (Object.keys(updates).length === 0) {
+          return "What would you like to update about these tasks? (e.g., 'mark all tasks as completed')";
+        }
+
+        // Build filters for bulk update
+        const filters: { status?: string; dateRange?: string } = {};
+        if (analysis.parameters.statusFilter) {
+          filters.status = analysis.parameters.statusFilter;
+        }
+        if (analysis.parameters.dateRange) {
+          filters.dateRange = analysis.parameters.dateRange;
+        }
+
+        const result = await bulkUpdateTasks(userNumber, updates, filters);
+        
+        if (result.count === 0) {
+          let message = "No tasks found";
+          if (filters.status) message += ` with status "${filters.status}"`;
+          if (filters.dateRange) message += ` for ${filters.dateRange}`;
+          message += " to update.";
+          return message;
+        }
+
+        return formatBulkUpdateResponse('task', result.count, updates, filters);
+      } catch (error) {
+        console.error('Error bulk updating tasks:', error);
+        return "I'm sorry, I couldn't update those tasks. Please try again.";
+      }
+    }
+
+    // Handle single task update (existing logic)
     try {
       const allTasksResult = await getTasks(userNumber, { limit: 1000 });
       const allTasks = allTasksResult.tasks;
@@ -82,6 +129,47 @@ export async function handleUpdate(
       return "I'm sorry, I couldn't update that task. Please try again.";
     }
   } else if (analysis.entityType === 'order' || analysis.entityType === 'product') {
+    // Handle bulk update for orders
+    if (isBulkUpdate) {
+      try {
+        const updates: any = {};
+        if (analysis.parameters.status) updates.status = analysis.parameters.status;
+        if (analysis.parameters.productName) updates.productName = analysis.parameters.productName;
+        if (analysis.parameters.quantity !== undefined) {
+          updates.quantity = analysis.parameters.quantity;
+        }
+
+        if (Object.keys(updates).length === 0) {
+          return "What would you like to update about these orders? (e.g., 'mark all orders as done')";
+        }
+
+        // Build filters for bulk update
+        const filters: { status?: string; dateRange?: string } = {};
+        if (analysis.parameters.statusFilter) {
+          filters.status = analysis.parameters.statusFilter;
+        }
+        if (analysis.parameters.dateRange) {
+          filters.dateRange = analysis.parameters.dateRange;
+        }
+
+        const result = await bulkUpdateOrders(userNumber, updates, filters);
+        
+        if (result.count === 0) {
+          let message = "No orders found";
+          if (filters.status) message += ` with status "${filters.status}"`;
+          if (filters.dateRange) message += ` for ${filters.dateRange}`;
+          message += " to update.";
+          return message;
+        }
+
+        return formatBulkUpdateResponse('order', result.count, updates, filters);
+      } catch (error) {
+        console.error('Error bulk updating orders:', error);
+        return "I'm sorry, I couldn't update those orders. Please try again.";
+      }
+    }
+
+    // Handle single order update (existing logic)
     try {
       const orderId = analysis.parameters.orderId;
       if (!orderId) {

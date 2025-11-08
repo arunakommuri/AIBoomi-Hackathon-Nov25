@@ -599,6 +599,48 @@ export async function getOrderByOrderId(
   }
 }
 
+/**
+ * Get orders with their items for summary generation
+ */
+export async function getOrdersWithItemsForSummary(
+  userNumber: string,
+  dateRange?: string
+): Promise<Array<Order & { items: OrderItem[] }>> {
+  // Explicitly select all columns including fulfillment_date
+  let queryText = 'SELECT id, user_number, order_id, product_name, quantity, status, fulfillment_date, original_message, created_at, updated_at FROM orders WHERE user_number = $1';
+  const params: any[] = [userNumber];
+  let paramIndex = 2;
+
+  // Apply date range filter if provided (filter by fulfillment_date for orders)
+  if (dateRange) {
+    const dateRangeObj = parseDateRange(dateRange);
+    if (dateRangeObj.startDate && dateRangeObj.endDate) {
+      queryText += ` AND fulfillment_date >= $${paramIndex} AND fulfillment_date <= $${paramIndex + 1}`;
+      params.push(dateRangeObj.startDate, dateRangeObj.endDate);
+      paramIndex += 2;
+    }
+  }
+
+  // Sort by fulfillment_date ASC
+  queryText += ' ORDER BY fulfillment_date ASC NULLS LAST, created_at DESC';
+
+  // No limit for summaries - we want all orders in the date range
+  const result = await query(queryText, params);
+
+  // Get items for each order
+  const ordersWithItems = await Promise.all(
+    result.rows.map(async (order) => {
+      const items = await getOrderItems(order.id);
+      return {
+        ...order,
+        items: items.length > 0 ? items : [{ productName: order.product_name, quantity: order.quantity }]
+      };
+    })
+  );
+
+  return ordersWithItems;
+}
+
 export async function getOrders(
   userNumber: string,
   filters?: { status?: string; limit?: number; dateRange?: string; offset?: number }
@@ -706,5 +748,143 @@ export async function updateOrder(
   }
 
   return result.rows[0];
+}
+
+/**
+ * Bulk update tasks based on filters
+ * @param userNumber - User's phone number
+ * @param updates - Fields to update
+ * @param filters - Filters to apply (status, dateRange)
+ * @returns Array of updated tasks and count
+ */
+export async function bulkUpdateTasks(
+  userNumber: string,
+  updates: { title?: string; description?: string; dueDate?: Date | null; status?: string },
+  filters?: { status?: string; dateRange?: string }
+): Promise<{ tasks: Task[]; count: number }> {
+  const updateFields: string[] = [];
+  const params: any[] = [];
+  let paramIndex = 1;
+
+  if (updates.title !== undefined) {
+    updateFields.push(`title = $${paramIndex++}`);
+    params.push(updates.title);
+  }
+  if (updates.description !== undefined) {
+    updateFields.push(`description = $${paramIndex++}`);
+    params.push(updates.description);
+  }
+  if (updates.dueDate !== undefined) {
+    updateFields.push(`due_date = $${paramIndex++}`);
+    params.push(updates.dueDate);
+  }
+  if (updates.status !== undefined) {
+    updateFields.push(`status = $${paramIndex++}`);
+    params.push(updates.status);
+  }
+
+  if (updateFields.length === 0) {
+    return { tasks: [], count: 0 };
+  }
+
+  updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+
+  // Build WHERE clause
+  let whereClause = 'WHERE user_number = $' + paramIndex++;
+  params.push(userNumber);
+
+  // Add status filter
+  if (filters?.status) {
+    whereClause += ` AND status = $${paramIndex++}`;
+    params.push(filters.status);
+  }
+
+  // Add date range filter (filter by due_date for tasks)
+  if (filters?.dateRange) {
+    const dateRange = parseDateRange(filters.dateRange);
+    if (dateRange.startDate && dateRange.endDate) {
+      const startParam = paramIndex++;
+      const endParam = paramIndex++;
+      whereClause += ` AND due_date >= $${startParam}::timestamp AND due_date <= $${endParam}::timestamp`;
+      params.push(dateRange.startDate, dateRange.endDate);
+    }
+  }
+
+  const result = await query(
+    `UPDATE tasks 
+     SET ${updateFields.join(', ')}
+     ${whereClause}
+     RETURNING *`,
+    params
+  );
+
+  return { tasks: result.rows, count: result.rows.length };
+}
+
+/**
+ * Bulk update orders based on filters
+ * @param userNumber - User's phone number
+ * @param updates - Fields to update
+ * @param filters - Filters to apply (status, dateRange)
+ * @returns Array of updated orders and count
+ */
+export async function bulkUpdateOrders(
+  userNumber: string,
+  updates: { productName?: string; quantity?: number; status?: string },
+  filters?: { status?: string; dateRange?: string }
+): Promise<{ orders: Order[]; count: number }> {
+  const updateFields: string[] = [];
+  const params: any[] = [];
+  let paramIndex = 1;
+
+  if (updates.productName !== undefined) {
+    updateFields.push(`product_name = $${paramIndex++}`);
+    params.push(updates.productName);
+  }
+  if (updates.quantity !== undefined) {
+    updateFields.push(`quantity = $${paramIndex++}`);
+    params.push(updates.quantity);
+  }
+  if (updates.status !== undefined) {
+    updateFields.push(`status = $${paramIndex++}`);
+    params.push(updates.status);
+  }
+
+  if (updateFields.length === 0) {
+    return { orders: [], count: 0 };
+  }
+
+  updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+
+  // Build WHERE clause
+  let whereClause = 'WHERE user_number = $' + paramIndex++;
+  params.push(userNumber);
+
+  // Add status filter
+  if (filters?.status) {
+    whereClause += ` AND status = $${paramIndex++}`;
+    params.push(filters.status);
+  }
+
+  // Add date range filter (filter by fulfillment_date for orders)
+  if (filters?.dateRange) {
+    const dateRange = parseDateRange(filters.dateRange);
+    if (dateRange.startDate && dateRange.endDate) {
+      const startParam = paramIndex++;
+      const endParam = paramIndex++;
+      whereClause += ` AND fulfillment_date >= $${startParam}::timestamp AND fulfillment_date <= $${endParam}::timestamp`;
+      params.push(dateRange.startDate, dateRange.endDate);
+    }
+  }
+
+  const result = await query(
+    `UPDATE orders 
+     SET ${updateFields.join(', ')}
+     ${whereClause}
+     RETURNING *`,
+    params
+  );
+
+  return { orders: result.rows, count: result.rows.length };
 }
 

@@ -1,6 +1,6 @@
 import { query } from '@/lib/db';
-import { getTasks, getOrders, getOrderByOrderId } from '@/lib/crud';
-import { formatTaskResponse, formatOrderResponse, formatOrderDetailsResponse } from '@/lib/response-formatter';
+import { getTasks, getOrders, getOrderByOrderId, getOrdersWithItemsForSummary } from '@/lib/crud';
+import { formatTaskResponse, formatOrderResponse, formatOrderDetailsResponse, formatOrderSummaryResponse } from '@/lib/response-formatter';
 import { parseOrderNumberFromMessage, parseOrderMappingsFromMessage } from './utils';
 
 export async function handleGet(
@@ -117,6 +117,13 @@ export async function handleGet(
       // Extract date range filter (e.g., "orders today", "orders this week")
       if (analysis.parameters.dateRange) {
         filters.dateRange = analysis.parameters.dateRange;
+      }
+      
+      // Check if user wants a summary
+      if (analysis.parameters.summary === true) {
+        const dateRange = analysis.parameters.dateRange || 'all time';
+        const ordersWithItems = await getOrdersWithItemsForSummary(userNumber, dateRange);
+        return formatOrderSummaryResponse(ordersWithItems, dateRange);
       }
       
       const result = await getOrders(userNumber, filters);

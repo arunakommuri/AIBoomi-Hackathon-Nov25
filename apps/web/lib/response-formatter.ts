@@ -149,6 +149,73 @@ export function formatUpdateOrderResponse(order: Order): string {
   return `Order ${order.order_id || order.id} has been updated. Status: ${statusEmoji} ${order.status}`;
 }
 
+/**
+ * Format response for bulk update operations
+ * @param entityType - 'task' or 'order'
+ * @param count - Number of items updated
+ * @param updates - The updates that were applied
+ * @param filters - The filters that were used
+ */
+export function formatBulkUpdateResponse(
+  entityType: 'task' | 'order',
+  count: number,
+  updates: { status?: string; title?: string; description?: string; dueDate?: Date | null; productName?: string; quantity?: number },
+  filters?: { status?: string; dateRange?: string }
+): string {
+  const entityName = entityType === 'task' ? 'task' : 'order';
+  const entityNamePlural = entityType === 'task' ? 'tasks' : 'orders';
+  
+  // Build filter description
+  let filterDescription = '';
+  if (filters) {
+    const filterParts: string[] = [];
+    if (filters.status) {
+      filterParts.push(`with status "${filters.status}"`);
+    }
+    if (filters.dateRange) {
+      filterParts.push(`for ${filters.dateRange}`);
+    }
+    if (filterParts.length > 0) {
+      filterDescription = ` ${filterParts.join(' ')}`;
+    }
+  }
+
+  // Build update description
+  const updateParts: string[] = [];
+  if (updates.status) {
+    const statusEmoji = getStatusEmoji(updates.status);
+    updateParts.push(`status to ${statusEmoji} ${updates.status}`);
+  }
+  if (updates.title) {
+    updateParts.push(`title to "${updates.title}"`);
+  }
+  if (updates.description !== undefined) {
+    updateParts.push(`description`);
+  }
+  if (updates.dueDate !== undefined) {
+    updateParts.push(`due date`);
+  }
+  if (updates.productName) {
+    updateParts.push(`product name to "${updates.productName}"`);
+  }
+  if (updates.quantity !== undefined) {
+    updateParts.push(`quantity to ${updates.quantity}`);
+  }
+
+  const updateDescription = updateParts.length > 0 
+    ? updateParts.join(', ')
+    : 'updated';
+
+  if (count === 0) {
+    return `No ${entityNamePlural}${filterDescription} found to update.`;
+  }
+
+  let response = `✅ Successfully updated ${count} ${count === 1 ? entityName : entityNamePlural}${filterDescription}.\n\n`;
+  response += `Updated: ${updateDescription}`;
+
+  return response;
+}
+
 export function formatOrderDetailsResponse(order: Order & { mediaInfo?: { url?: string; type?: string; extractedText?: string }; items?: Array<{productName: string; quantity: number}> }): string {
   const fulfillmentDate = order.fulfillment_date
     ? formatDate(order.fulfillment_date)
@@ -196,6 +263,113 @@ export function formatOrderDetailsResponse(order: Order & { mediaInfo?: { url?: 
   }
   
   return response;
+}
+
+export function formatOrderSummaryResponse(
+  orders: Array<Order & { items: Array<{ productName: string; quantity: number }> }>,
+  dateRange: string
+): string {
+  if (orders.length === 0) {
+    return `📊 Order Summary for ${dateRange}\n\n❌ No orders found for this period.`;
+  }
+
+  // Calculate totals
+  const totalOrders = orders.length;
+  const completedOrders = orders.filter(o => o.status.toLowerCase() === 'completed').length;
+  const pendingOrders = orders.filter(o => o.status.toLowerCase() === 'pending').length;
+  const processingOrders = orders.filter(o => o.status.toLowerCase() === 'processing').length;
+  const cancelledOrders = orders.filter(o => o.status.toLowerCase() === 'cancelled').length;
+
+  // Build header with totals
+  let response = `📊 Order Summary for ${dateRange}\n\n`;
+  response += `📦 Total Orders: ${totalOrders}`;
+  if (completedOrders > 0) response += ` | ✅ Completed: ${completedOrders}`;
+  if (pendingOrders > 0) response += ` | ⏳ Pending: ${pendingOrders}`;
+  if (processingOrders > 0) response += ` | 🔄 Processing: ${processingOrders}`;
+  if (cancelledOrders > 0) response += ` | ❌ Cancelled: ${cancelledOrders}`;
+  response += `\n\n`;
+
+  // Group orders by status
+  const ordersByStatus: Record<string, Array<Order & { items: Array<{ productName: string; quantity: number }> }>> = {};
+  orders.forEach(order => {
+    const status = order.status.toLowerCase();
+    if (!ordersByStatus[status]) {
+      ordersByStatus[status] = [];
+    }
+    ordersByStatus[status].push(order);
+  });
+
+  // Define status order and emojis
+  const statusOrder = ['completed', 'processing', 'pending', 'cancelled'];
+  const statusEmojis: Record<string, string> = {
+    'completed': '✅',
+    'processing': '🔄',
+    'pending': '⏳',
+    'cancelled': '❌'
+  };
+  const statusLabels: Record<string, string> = {
+    'completed': 'Completed',
+    'processing': 'Processing',
+    'pending': 'Pending',
+    'cancelled': 'Cancelled'
+  };
+
+  // Process each status
+  statusOrder.forEach(status => {
+    const statusOrders = ordersByStatus[status];
+    if (!statusOrders || statusOrders.length === 0) {
+      return;
+    }
+
+    const emoji = statusEmojis[status] || '📊';
+    const label = statusLabels[status] || status;
+    
+    response += `${emoji} ${label} Orders (${statusOrders.length})\n`;
+
+    // Aggregate products by name
+    const productAggregation: Record<string, number> = {};
+    
+    statusOrders.forEach(order => {
+      if (order.items && order.items.length > 0) {
+        order.items.forEach(item => {
+          const productName = item.productName.toLowerCase().trim();
+          if (productAggregation[productName]) {
+            productAggregation[productName] += item.quantity;
+          } else {
+            productAggregation[productName] = item.quantity;
+          }
+        });
+      } else {
+        // Fallback to main product_name if no items
+        const productName = order.product_name.toLowerCase().trim();
+        if (productAggregation[productName]) {
+          productAggregation[productName] += order.quantity;
+        } else {
+          productAggregation[productName] = order.quantity;
+        }
+      }
+    });
+
+    // Sort products by quantity (descending)
+    const sortedProducts = Object.entries(productAggregation)
+      .sort((a, b) => b[1] - a[1]);
+
+    // Display aggregated products
+    if (sortedProducts.length > 0) {
+      sortedProducts.forEach(([productName, totalQuantity]) => {
+        // Capitalize first letter of each word for better display
+        const displayName = productName
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        response += `   • ${displayName}: ${totalQuantity}\n`;
+      });
+    }
+
+    response += `\n`;
+  });
+
+  return response.trim();
 }
 
 export function formatDate(date: Date | string): string {
