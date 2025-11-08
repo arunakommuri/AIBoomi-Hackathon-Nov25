@@ -64,9 +64,23 @@ export async function initializeSchema(): Promise<void> {
         description TEXT,
         due_date TIMESTAMP,
         status VARCHAR(50) DEFAULT 'pending',
+        original_message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`
+    );
+
+    // Add original_message column if it doesn't exist (for existing databases)
+    await query(
+      `DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'tasks' AND column_name = 'original_message'
+        ) THEN
+          ALTER TABLE tasks ADD COLUMN original_message TEXT;
+        END IF;
+      END $$;`
     );
 
     // Create orders table
@@ -78,9 +92,69 @@ export async function initializeSchema(): Promise<void> {
         product_name VARCHAR(500) NOT NULL,
         quantity INTEGER DEFAULT 1,
         status VARCHAR(50) DEFAULT 'pending',
+        fulfillment_date TIMESTAMP,
+        original_message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`
+    );
+
+    // Add fulfillment_date column if it doesn't exist (for existing databases)
+    await query(
+      `DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'orders' AND column_name = 'fulfillment_date'
+        ) THEN
+          ALTER TABLE orders ADD COLUMN fulfillment_date TIMESTAMP;
+        END IF;
+      END $$;`
+    );
+
+    // Add original_message column if it doesn't exist (for existing databases)
+    await query(
+      `DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'orders' AND column_name = 'original_message'
+        ) THEN
+          ALTER TABLE orders ADD COLUMN original_message TEXT;
+        END IF;
+      END $$;`
+    );
+
+    // Create pending_confirmations table for task update confirmations
+    await query(
+      `CREATE TABLE IF NOT EXISTS pending_confirmations (
+        id SERIAL PRIMARY KEY,
+        user_number VARCHAR(255) NOT NULL,
+        task_id INTEGER NOT NULL,
+        updates JSONB NOT NULL,
+        original_message TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '1 hour')
+      )`
+    );
+
+    // Create pagination_state table for tracking list pagination
+    await query(
+      `CREATE TABLE IF NOT EXISTS pagination_state (
+        id SERIAL PRIMARY KEY,
+        user_number VARCHAR(255) NOT NULL,
+        entity_type VARCHAR(50) NOT NULL,
+        offset_count INTEGER DEFAULT 0,
+        total_count INTEGER,
+        filters JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 minutes'),
+        UNIQUE(user_number, entity_type)
+      )`
+    );
+
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_pagination_state_user ON pagination_state(user_number, entity_type)`
     );
 
     // Create indexes for better query performance
@@ -92,6 +166,9 @@ export async function initializeSchema(): Promise<void> {
     );
     await query(
       `CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id)`
+    );
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user ON pending_confirmations(user_number)`
     );
 
     console.log('Database schema initialized successfully');

@@ -20,6 +20,7 @@ export interface MessageAnalysis {
     quantity?: number;
     status?: string;
     taskId?: number;
+    dateRange?: string; // e.g., "this week", "this month", "last week", "today", "yesterday"
     [key: string]: any;
   };
 }
@@ -42,8 +43,10 @@ Return ONLY a valid JSON object with this exact structure:
     "orderId": "string (for orders, extract number/ID from message)",
     "productName": "string (for orders/products)",
     "quantity": number (for orders/products),
+    "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled, e.g., 'tomorrow', 'next week', '15th November')",
     "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled')",
-    "taskId": number (for task updates, extract ID from message)
+    "taskId": number (for task updates, extract ID from message),
+    "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', etc.)"
   }
 }
 
@@ -55,7 +58,8 @@ IMPORTANT RULES:
   * "I need to..." → CREATE task (if it sounds like a task/reminder)
   * "Remind me to..." → CREATE reminder
   * "Order..." or "I want to order..." → CREATE order
-- Intent "get": User wants to view/list their tasks, reminders, or orders (e.g., "show my tasks", "list orders", "what are my reminders", "my tasks")
+- Intent "get": User wants to view/list their tasks, reminders, or orders (e.g., "show my tasks", "list orders", "what are my reminders", "my tasks", "orders this week", "tasks this month")
+  * Extract dateRange from phrases like "this week", "this month", "last week", "today", "yesterday", "last month", "this year"
 - Intent "update": User wants to modify an existing task or order (e.g., "mark task 1 as completed", "update order #123")
 - Intent "unknown": Only use if truly cannot determine intent
 
@@ -117,6 +121,134 @@ Return ONLY the JSON object, no other text:`;
       intent: 'unknown',
       entityType: null,
       parameters: {},
+    };
+  }
+}
+
+export interface TaskMatch {
+  taskId: number;
+  confidence: number; // 0-1, where 1 is highest confidence
+  ambiguity: number; // 0-1, where 1 is highest ambiguity (multiple good matches)
+  reason: string;
+}
+
+export interface TaskMatchResult {
+  bestMatch: TaskMatch | null;
+  allMatches: TaskMatch[];
+  needsConfirmation: boolean;
+}
+
+export async function findMatchingTask(
+  userMessage: string,
+  tasks: Array<{ id: number; title: string; description: string | null; due_date: Date | null; status: string }>
+): Promise<TaskMatchResult> {
+  try {
+    if (tasks.length === 0) {
+      return {
+        bestMatch: null,
+        allMatches: [],
+        needsConfirmation: false,
+      };
+    }
+
+    const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    // Format tasks for the prompt
+    const tasksList = tasks.map((task, index) => {
+      const dueDateStr = task.due_date
+        ? new Date(task.due_date).toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        : 'No due date';
+      return `${index + 1}. Task ID: ${task.id}, Title: "${task.title}", Description: ${task.description || 'None'}, Due Date: ${dueDateStr}, Status: ${task.status}`;
+    }).join('\n');
+
+    const prompt = `You are analyzing a user's message to find which task they want to update from their list of tasks.
+
+User's message: "${userMessage}"
+
+Available tasks:
+${tasksList}
+
+Analyze the user's message and find the best matching task(s). Consider:
+- Date references (e.g., "15th", "19th", "from 15th to 19th")
+- Task titles or keywords
+- Context clues
+
+Return ONLY a valid JSON object with this exact structure:
+{
+  "matches": [
+    {
+      "taskId": number (the actual task ID from the list),
+      "confidence": number (0.0 to 1.0, where 1.0 is highest confidence),
+      "reason": "string explaining why this task matches"
+    }
+  ],
+  "needsConfirmation": boolean (true if confidence < 0.8 OR if multiple tasks have confidence > 0.6)
+}
+
+Rules:
+- confidence >= 0.8 and only one match → needsConfirmation: false (high confidence, single match)
+- confidence < 0.8 OR multiple matches with confidence > 0.6 → needsConfirmation: true (low confidence or ambiguous)
+- Sort matches by confidence (highest first)
+- If no good match (all confidence < 0.5), return empty matches array
+
+Return ONLY the JSON object, no other text:`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Extract JSON from response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error('No JSON found in task matching response:', text);
+      return {
+        bestMatch: null,
+        allMatches: [],
+        needsConfirmation: false,
+      };
+    }
+
+    const matchData = JSON.parse(jsonMatch[0]) as {
+      matches: Array<{ taskId: number; confidence: number; reason: string }>;
+      needsConfirmation: boolean;
+    };
+
+    // Calculate ambiguity (if multiple high-confidence matches)
+    const highConfidenceMatches = matchData.matches.filter(m => m.confidence > 0.6);
+    const ambiguity = highConfidenceMatches.length > 1 ? 1.0 : 0.0;
+
+    const allMatches: TaskMatch[] = matchData.matches.map(m => ({
+      taskId: m.taskId,
+      confidence: m.confidence,
+      ambiguity,
+      reason: m.reason,
+    }));
+
+    const bestMatch = allMatches.length > 0 ? allMatches[0] : null;
+
+    // Determine if confirmation is needed
+    const needsConfirmation =
+      matchData.needsConfirmation ||
+      (bestMatch && bestMatch.confidence < 0.8) ||
+      (highConfidenceMatches.length > 1);
+
+    return {
+      bestMatch,
+      allMatches,
+      needsConfirmation,
+    };
+  } catch (error) {
+    console.error('Error finding matching task:', error);
+    return {
+      bestMatch: null,
+      allMatches: [],
+      needsConfirmation: false,
     };
   }
 }

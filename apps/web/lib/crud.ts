@@ -1,4 +1,5 @@
 import { query } from './db';
+import { parseDateRange, DateRange } from './date-utils';
 
 export interface Task {
   id: number;
@@ -7,6 +8,7 @@ export interface Task {
   description: string | null;
   due_date: Date | null;
   status: string;
+  original_message: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -18,6 +20,8 @@ export interface Order {
   product_name: string;
   quantity: number;
   status: string;
+  fulfillment_date: Date | null;
+  original_message: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -27,7 +31,8 @@ export async function createTask(
   userNumber: string,
   title: string,
   description?: string,
-  dueDate?: string
+  dueDate?: string,
+  originalMessage?: string
 ): Promise<Task> {
   let parsedDueDate: Date | null = null;
   
@@ -117,10 +122,10 @@ export async function createTask(
   }
 
   const result = await query(
-    `INSERT INTO tasks (user_number, title, description, due_date, status)
-     VALUES ($1, $2, $3, $4, 'pending')
+    `INSERT INTO tasks (user_number, title, description, due_date, status, original_message)
+     VALUES ($1, $2, $3, $4, 'pending', $5)
      RETURNING *`,
-    [userNumber, title, description || null, parsedDueDate]
+    [userNumber, title, description || null, parsedDueDate, originalMessage || null]
   );
 
   return result.rows[0];
@@ -128,25 +133,60 @@ export async function createTask(
 
 export async function getTasks(
   userNumber: string,
-  filters?: { status?: string; limit?: number }
-): Promise<Task[]> {
+  filters?: { status?: string; limit?: number; dateRange?: string; offset?: number }
+): Promise<{ tasks: Task[]; total: number }> {
   let queryText = 'SELECT * FROM tasks WHERE user_number = $1';
+  let countQueryText = 'SELECT COUNT(*) as total FROM tasks WHERE user_number = $1';
   const params: any[] = [userNumber];
+  const countParams: any[] = [userNumber];
+  let paramIndex = 2;
+  let countParamIndex = 2;
 
   if (filters?.status) {
-    queryText += ' AND status = $2';
+    queryText += ` AND status = $${paramIndex}`;
+    countQueryText += ` AND status = $${countParamIndex}`;
     params.push(filters.status);
+    countParams.push(filters.status);
+    paramIndex++;
+    countParamIndex++;
   }
 
-  queryText += ' ORDER BY created_at DESC';
-
-  if (filters?.limit) {
-    queryText += ` LIMIT $${params.length + 1}`;
-    params.push(filters.limit);
+  // Apply date range filter if provided (filter by due_date for tasks)
+  if (filters?.dateRange) {
+    const dateRange = parseDateRange(filters.dateRange);
+    if (dateRange.startDate && dateRange.endDate) {
+      queryText += ` AND due_date >= $${paramIndex} AND due_date <= $${paramIndex + 1}`;
+      countQueryText += ` AND due_date >= $${countParamIndex} AND due_date <= $${countParamIndex + 1}`;
+      params.push(dateRange.startDate, dateRange.endDate);
+      countParams.push(dateRange.startDate, dateRange.endDate);
+      paramIndex += 2;
+      countParamIndex += 2;
+    }
   }
 
-  const result = await query(queryText, params);
-  return result.rows;
+  // Sort by due_date ASC (NULLS LAST - tasks without due dates go to the end)
+  queryText += ' ORDER BY due_date ASC NULLS LAST, created_at DESC';
+
+  // Apply offset for pagination
+  if (filters?.offset) {
+    queryText += ` OFFSET $${paramIndex}`;
+    params.push(filters.offset);
+    paramIndex++;
+  }
+
+  // Default limit to 5 if not specified
+  const limit = filters?.limit || 5;
+  queryText += ` LIMIT $${paramIndex}`;
+  params.push(limit);
+
+  const [result, totalResult] = await Promise.all([
+    query(queryText, params),
+    query(countQueryText, countParams)
+  ]);
+
+  const total = parseInt(totalResult.rows[0]?.total || '0');
+
+  return { tasks: result.rows, total };
 }
 
 export async function updateTask(
@@ -197,16 +237,76 @@ export async function createOrder(
   userNumber: string,
   productName: string,
   quantity: number = 1,
-  orderId?: string
+  orderId?: string,
+  fulfillmentDate?: string,
+  originalMessage?: string
 ): Promise<Order> {
   // Generate order ID if not provided
   const finalOrderId = orderId || `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+  // Parse fulfillment date if provided (similar to task due date parsing)
+  let parsedFulfillmentDate: Date | null = null;
+  if (fulfillmentDate) {
+    const now = new Date();
+    const lowerDate = fulfillmentDate.toLowerCase().trim();
+    
+    if (lowerDate === 'tomorrow') {
+      parsedFulfillmentDate = new Date(now);
+      parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 1);
+    } else if (lowerDate.includes('next week')) {
+      parsedFulfillmentDate = new Date(now);
+      parsedFulfillmentDate.setDate(parsedFulfillmentDate.getDate() + 7);
+    } else if (lowerDate.includes('next month')) {
+      parsedFulfillmentDate = new Date(now);
+      parsedFulfillmentDate.setMonth(parsedFulfillmentDate.getMonth() + 1);
+    } else {
+      // Try to parse dates like "15th November" or "Saturday 15th November"
+      try {
+        const dateStr = fulfillmentDate.replace(/(\d+)(st|nd|rd|th)/g, '$1');
+        parsedFulfillmentDate = new Date(dateStr);
+        
+        if (isNaN(parsedFulfillmentDate.getTime())) {
+          // Try manual parsing for formats like "15th November"
+          const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                            'july', 'august', 'september', 'october', 'november', 'december'];
+          const lowerStr = dateStr.toLowerCase();
+          let day: number | null = null;
+          let month: number | null = null;
+          let year = now.getFullYear();
+          
+          const dayMatch = dateStr.match(/\b(\d{1,2})\b/);
+          if (dayMatch) {
+            day = parseInt(dayMatch[1]);
+          }
+          
+          for (let i = 0; i < monthNames.length; i++) {
+            if (lowerStr.includes(monthNames[i])) {
+              month = i;
+              break;
+            }
+          }
+          
+          if (day !== null && month !== null) {
+            parsedFulfillmentDate = new Date(year, month, day);
+            if (parsedFulfillmentDate < now) {
+              parsedFulfillmentDate.setFullYear(year + 1);
+            }
+          } else {
+            parsedFulfillmentDate = null;
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing fulfillment date:', error);
+        parsedFulfillmentDate = null;
+      }
+    }
+  }
+
   const result = await query(
-    `INSERT INTO orders (user_number, order_id, product_name, quantity, status)
-     VALUES ($1, $2, $3, $4, 'pending')
+    `INSERT INTO orders (user_number, order_id, product_name, quantity, status, fulfillment_date, original_message)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6)
      RETURNING *`,
-    [userNumber, finalOrderId, productName, quantity]
+    [userNumber, finalOrderId, productName, quantity, parsedFulfillmentDate, originalMessage || null]
   );
 
   return result.rows[0];
@@ -214,25 +314,71 @@ export async function createOrder(
 
 export async function getOrders(
   userNumber: string,
-  filters?: { status?: string; limit?: number }
-): Promise<Order[]> {
+  filters?: { status?: string; limit?: number; dateRange?: string; offset?: number }
+): Promise<{ orders: Order[]; total: number }> {
   let queryText = 'SELECT * FROM orders WHERE user_number = $1';
   const params: any[] = [userNumber];
+  let paramIndex = 2;
 
   if (filters?.status) {
-    queryText += ' AND status = $2';
+    queryText += ` AND status = $${paramIndex}`;
     params.push(filters.status);
+    paramIndex++;
   }
 
-  queryText += ' ORDER BY created_at DESC';
-
-  if (filters?.limit) {
-    queryText += ` LIMIT $${params.length + 1}`;
-    params.push(filters.limit);
+  // Apply date range filter if provided (filter by fulfillment_date for orders)
+  if (filters?.dateRange) {
+    const dateRange = parseDateRange(filters.dateRange);
+    if (dateRange.startDate && dateRange.endDate) {
+      queryText += ` AND fulfillment_date >= $${paramIndex} AND fulfillment_date <= $${paramIndex + 1}`;
+      params.push(dateRange.startDate, dateRange.endDate);
+      paramIndex += 2;
+    }
   }
 
-  const result = await query(queryText, params);
-  return result.rows;
+  // Sort by fulfillment_date ASC (NULLS LAST - orders without fulfillment dates go to the end)
+  queryText += ' ORDER BY fulfillment_date ASC NULLS LAST, created_at DESC';
+
+  // Apply offset for pagination
+  if (filters?.offset) {
+    queryText += ` OFFSET $${paramIndex}`;
+    params.push(filters.offset);
+    paramIndex++;
+  }
+
+  // Default limit to 5 if not specified
+  const limit = filters?.limit || 5;
+  queryText += ` LIMIT $${paramIndex}`;
+  params.push(limit);
+
+  // Get total count with same filters
+  let countQueryText = 'SELECT COUNT(*) as total FROM orders WHERE user_number = $1';
+  const countParams: any[] = [userNumber];
+  let countParamIndex = 2;
+
+  if (filters?.status) {
+    countQueryText += ` AND status = $${countParamIndex}`;
+    countParams.push(filters.status);
+    countParamIndex++;
+  }
+
+  if (filters?.dateRange) {
+    const dateRange = parseDateRange(filters.dateRange);
+    if (dateRange.startDate && dateRange.endDate) {
+      countQueryText += ` AND fulfillment_date >= $${countParamIndex} AND fulfillment_date <= $${countParamIndex + 1}`;
+      countParams.push(dateRange.startDate, dateRange.endDate);
+      countParamIndex += 2;
+    }
+  }
+
+  const [result, totalResult] = await Promise.all([
+    query(queryText, params),
+    query(countQueryText, countParams)
+  ]);
+
+  const total = parseInt(totalResult.rows[0]?.total || '0');
+
+  return { orders: result.rows, total };
 }
 
 export async function updateOrder(
