@@ -52,3 +52,52 @@ export async function testConnection(): Promise<boolean> {
   }
 }
 
+// Initialize database schema
+export async function initializeSchema(): Promise<void> {
+  try {
+    // Create tasks table
+    await query(
+      `CREATE TABLE IF NOT EXISTS tasks (
+        id SERIAL PRIMARY KEY,
+        user_number VARCHAR(255) NOT NULL,
+        title VARCHAR(500) NOT NULL,
+        description TEXT,
+        due_date TIMESTAMP,
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`
+    );
+
+    // Create orders table
+    await query(
+      `CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        user_number VARCHAR(255) NOT NULL,
+        order_id VARCHAR(255) UNIQUE,
+        product_name VARCHAR(500) NOT NULL,
+        quantity INTEGER DEFAULT 1,
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`
+    );
+
+    // Create indexes for better query performance
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_tasks_user_number ON tasks(user_number)`
+    );
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_orders_user_number ON orders(user_number)`
+    );
+    await query(
+      `CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id)`
+    );
+
+    console.log('Database schema initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database schema:', error);
+    throw error;
+  }
+}
+

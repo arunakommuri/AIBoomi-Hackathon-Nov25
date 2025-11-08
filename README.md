@@ -21,6 +21,7 @@ A Next.js monorepo project with WhatsApp integration using Twilio and PostgreSQL
 - Node.js 18+ installed
 - Docker installed (for PostgreSQL)
 - Twilio account with WhatsApp enabled
+- Google Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
 - npm or yarn package manager
 
 ## Setup Instructions
@@ -64,14 +65,18 @@ TWILIO_ACCOUNT_SID=your_twilio_account_sid_here
 TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
 TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
 
+# Gemini LLM Configuration
+GEMINI_API_KEY=your_gemini_api_key_here
+
 # Next.js
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-Replace the Twilio credentials with your actual values:
+Replace the credentials with your actual values:
 - `TWILIO_ACCOUNT_SID`: Your Twilio Account SID
 - `TWILIO_AUTH_TOKEN`: Your Twilio Auth Token
 - `TWILIO_WHATSAPP_FROM`: Your Twilio WhatsApp number (format: `whatsapp:+1234567890`)
+- `GEMINI_API_KEY`: Your Google Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
 
 ### 4. Run the Development Server
 
@@ -98,15 +103,36 @@ The application will be available at `http://localhost:3000`
 
 - ✅ WhatsApp webhook endpoint at `/api/webhook/whatsapp`
 - ✅ PostgreSQL database connection
+- ✅ Google Gemini LLM integration for message analysis
 - ✅ Automatic message storage in database
-- ✅ Simple "Hi" response to all incoming messages
+- ✅ Intelligent CRUD operations for Tasks/Reminders and Orders/Products
+- ✅ Natural language understanding and response generation
 
 ### How It Works
 
 1. When a user sends a WhatsApp message to your Twilio number, Twilio sends a POST request to your webhook endpoint
 2. The webhook receives the message and stores it in the PostgreSQL database
-3. The bot responds with "Hi" message
-4. The response is sent back via Twilio's WhatsApp API
+3. The message is analyzed using Google Gemini LLM to extract:
+   - **Intent**: create, get, update, or unknown
+   - **Entity Type**: task, reminder, order, or product
+   - **Parameters**: relevant data like task title, due date, order ID, etc.
+4. Based on the analysis, the system performs the appropriate database operation:
+   - **Create**: Creates new tasks or orders
+   - **Get**: Retrieves and lists user's tasks or orders
+   - **Update**: Updates existing tasks or orders
+5. A natural language response is generated and sent back via Twilio's WhatsApp API
+
+### Supported Commands
+
+**Tasks/Reminders:**
+- Create: "Create a task to buy groceries tomorrow"
+- View: "Show my tasks" or "List my reminders"
+- Update: "Mark task 1 as completed" or "Update task 2 to completed"
+
+**Orders/Products:**
+- Create: "Create an order for 5 laptops"
+- View: "Show my orders" or "List my products"
+- Update: "Update order #123 to completed" or "Change order ORD-123 status to processing"
 
 ## API Endpoints
 
@@ -123,8 +149,9 @@ Twilio webhook endpoint that receives incoming WhatsApp messages.
 
 ## Database Schema
 
-The application automatically creates a `messages` table with the following structure:
+The application automatically creates the following tables:
 
+**Messages Table:**
 ```sql
 CREATE TABLE messages (
   id SERIAL PRIMARY KEY,
@@ -132,6 +159,34 @@ CREATE TABLE messages (
   from_number VARCHAR(255),
   body TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Tasks Table:**
+```sql
+CREATE TABLE tasks (
+  id SERIAL PRIMARY KEY,
+  user_number VARCHAR(255) NOT NULL,
+  title VARCHAR(500) NOT NULL,
+  description TEXT,
+  due_date TIMESTAMP,
+  status VARCHAR(50) DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Orders Table:**
+```sql
+CREATE TABLE orders (
+  id SERIAL PRIMARY KEY,
+  user_number VARCHAR(255) NOT NULL,
+  order_id VARCHAR(255) UNIQUE,
+  product_name VARCHAR(500) NOT NULL,
+  quantity INTEGER DEFAULT 1,
+  status VARCHAR(50) DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -146,12 +201,13 @@ CREATE TABLE messages (
 
 ## Next Steps
 
+- [x] Implement AI/ML integration for intelligent responses (Gemini LLM)
+- [x] Add CRUD operations for tasks and orders
 - [ ] Add conversation state management
-- [ ] Implement more sophisticated message handling
 - [ ] Add user authentication/identification
 - [ ] Create admin dashboard
 - [ ] Add message history viewing
-- [ ] Implement AI/ML integration for intelligent responses
+- [ ] Add support for deleting tasks and orders
 
 ## Troubleshooting
 
@@ -170,3 +226,10 @@ CREATE TABLE messages (
 ### Port Conflicts
 
 If port 3000 is in use, Next.js will automatically use the next available port.
+
+### Gemini API Issues
+
+- Ensure your `GEMINI_API_KEY` is set correctly in `.env.local`
+- Check that you have API quota available in your Google Cloud Console
+- Verify the API key has access to Gemini Pro model
+- If you see "API key not valid" errors, regenerate your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
