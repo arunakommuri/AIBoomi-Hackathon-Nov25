@@ -32,13 +32,166 @@ export interface MessageAnalysis {
   };
 }
 
-export async function analyzeMessage(message: string): Promise<MessageAnalysis> {
+export interface LanguageDetectionResult {
+  isEnglishOnly: boolean;
+  isMixedLanguage: boolean;
+  isNonEnglish: boolean;
+  detectedLanguages?: string[];
+  needsTranslation: boolean; // true if needs Sarvam API translation
+}
+
+/**
+ * Detect language type of a message using Gemini
+ * Determines if message is English-only, mixed-language, or non-English
+ * This helps avoid unnecessary calls to Sarvam API for English-only messages
+ * 
+ * @param message - Message to analyze
+ * @returns Language detection result
+ */
+export async function detectLanguage(message: string): Promise<LanguageDetectionResult> {
+  try {
+    if (!message || !message.trim()) {
+      return {
+        isEnglishOnly: true,
+        isMixedLanguage: false,
+        isNonEnglish: false,
+        needsTranslation: false,
+      };
+    }
+
+    const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const prompt = `Analyze the following message and determine its language composition.
+
+Message: "${message}"
+
+Determine if the message is:
+1. English-only: Contains only English words and characters
+2. Mixed-language: Contains a mix of English and Indian languages (like Tenglish, Hinglish, etc.)
+3. Non-English: Contains primarily Indian languages with minimal or no English
+
+Return ONLY a valid JSON object with this exact structure:
+{
+  "isEnglishOnly": boolean (true if message contains only English),
+  "isMixedLanguage": boolean (true if message contains mix of English and Indian languages like Tenglish, Hinglish, etc.),
+  "isNonEnglish": boolean (true if message is primarily in Indian languages with minimal English),
+  "detectedLanguages": ["string"] (array of detected languages, e.g., ["en", "te"] for Tenglish, ["en"] for English-only, ["hi"] for Hindi-only)
+}
+
+Rules:
+- If message contains only English words, numbers, and standard punctuation → isEnglishOnly: true
+- If message contains mix of English and Indian language words/scripts (e.g., "Nenu school ki late ayyanu" or "Main office jaana hai") → isMixedLanguage: true
+- If message is primarily in Indian language scripts (Devanagari, Telugu, Tamil, etc.) with minimal English → isNonEnglish: true
+- Indian languages include: Hindi, Telugu, Tamil, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, etc.
+- Code-mixed languages: Tenglish (Telugu + English), Hinglish (Hindi + English), Tanglish (Tamil + English), etc.
+
+Examples:
+- "Order 5 laptops" → {"isEnglishOnly": true, "isMixedLanguage": false, "isNonEnglish": false, "detectedLanguages": ["en"]}
+- "Nenu school ki late ayyanu because traffic chala undhi" → {"isEnglishOnly": false, "isMixedLanguage": true, "isNonEnglish": false, "detectedLanguages": ["en", "te"]}
+- "5 laptops order cheyali" → {"isEnglishOnly": false, "isMixedLanguage": true, "isNonEnglish": false, "detectedLanguages": ["en", "te"]}
+- "मुझे 5 लैपटॉप चाहिए" → {"isEnglishOnly": false, "isMixedLanguage": false, "isNonEnglish": true, "detectedLanguages": ["hi"]}
+- "Create a task to buy groceries" → {"isEnglishOnly": true, "isMixedLanguage": false, "isNonEnglish": false, "detectedLanguages": ["en"]}
+
+Return ONLY the JSON object, no other text:`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Extract JSON from response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error('No JSON found in language detection response:', text);
+      // Default to English-only if detection fails
+      return {
+        isEnglishOnly: true,
+        isMixedLanguage: false,
+        isNonEnglish: false,
+        needsTranslation: false,
+      };
+    }
+
+    const detection = JSON.parse(jsonMatch[0]) as LanguageDetectionResult;
+    
+    // Determine if translation is needed
+    // Translation needed if: mixed language OR non-English
+    detection.needsTranslation = detection.isMixedLanguage || detection.isNonEnglish;
+
+    return detection;
+  } catch (error) {
+    console.error('Error detecting language with Gemini:', error);
+    // Default to English-only on error to avoid unnecessary API calls
+    return {
+      isEnglishOnly: true,
+      isMixedLanguage: false,
+      isNonEnglish: false,
+      needsTranslation: false,
+    };
+  }
+}
+
+/**
+ * Translate text using Gemini
+ * Translates mixed-language or non-English text to English
+ * 
+ * @param text - Text to translate (can be mixed language like Tenglish, Hinglish)
+ * @returns Translated text in English
+ */
+export async function translateTextWithGemini(text: string): Promise<string> {
+  try {
+    if (!text || !text.trim()) {
+      return text;
+    }
+
+    const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    const prompt = `Translate the following message to English. 
+Preserve the meaning and context accurately. If the message is already in English, return it as-is.
+
+Message: "${text}"
+
+Return ONLY the translated text in English, no explanations or additional text:`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const translatedText = response.text().trim();
+
+    // If translation is same as original or empty, return original
+    if (!translatedText || translatedText === text) {
+      return text;
+    }
+
+    return translatedText;
+  } catch (error) {
+    console.error('Error translating text with Gemini:', error);
+    // Return original text on error to avoid breaking the flow
+    return text;
+  }
+}
+
+export async function analyzeMessage(message: string, originalMessage?: string): Promise<MessageAnalysis> {
   try {
     // Get model from environment variable, fallback to gemini-1.5-flash as default
     const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
     const model = genAI.getGenerativeModel({ model: modelName });
 
-    const prompt = `Analyze the following WhatsApp message and extract the intent, entity type, and parameters. 
+    // If original message is provided and different from translated message, 
+    // use it for product name extraction while using translated for intent
+    const hasOriginalMessage = originalMessage && originalMessage.trim() && originalMessage.trim() !== message.trim();
+    
+    const prompt = `Analyze the following WhatsApp message and extract the intent, entity type, and parameters.
+${hasOriginalMessage ? `
+IMPORTANT: The user sent a message in a mixed language (like Tenglish, Hinglish, etc.). 
+- Use the TRANSLATED MESSAGE below for understanding intent, entity type, dates, quantities, and other structured data.
+- Use the ORIGINAL MESSAGE below for extracting product names, titles, and descriptions to preserve the original language.
+
+TRANSLATED MESSAGE (use for intent/entity/structured data): "${message}"
+ORIGINAL MESSAGE (use for product names/titles/descriptions): "${originalMessage}"
+` : `
+MESSAGE: "${message}"
+`} 
 Return ONLY a valid JSON object with this exact structure:
 {
   "intent": "create" | "get" | "update" | "unknown",
@@ -48,10 +201,10 @@ Return ONLY a valid JSON object with this exact structure:
     "description": "string (optional, for tasks)",
     "dueDate": "string (optional, for tasks/reminders, can be relative like 'tomorrow', 'next week', or absolute date)",
     "orderId": "string (for orders, extract number/ID from message)",
-    "productName": "string (for orders/products, use only if single item)",
+    "productName": "string (for orders/products, use only if single item - EXTRACT FROM ORIGINAL MESSAGE if provided to preserve native language)",
     "quantity": number (for orders/products, use only if single item),
-    "items": [{"productName": "string", "quantity": number}] (for orders with MULTIPLE items - ALWAYS use this if multiple products detected),
-    "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled, e.g., 'tomorrow', 'next week', '15th November')",
+    "items": [{"productName": "string (EXTRACT FROM ORIGINAL MESSAGE if provided to preserve native language)", "quantity": number}] (for orders with MULTIPLE items - ALWAYS use this if multiple products detected. IMPORTANT: Each item should appear ONLY ONCE in the array. Do NOT duplicate items. Extract exact quantities from the message),
+    "fulfillmentDate": "string (for orders, extract when order needs to be fulfilled. IMPORTANT: Extract the FULL date/time phrase including both date and time if mentioned, e.g., 'tomorrow 5pm', 'by 5pm tomorrow', 'next week', '15th November 5pm'. Always include both date and time together if both are mentioned in the message)",
     "status": "string (for updates: 'pending', 'completed', 'processing', 'cancelled'. For get intent: extract status filter like 'pending', 'completed', 'processing', 'cancelled' when user asks for 'pending orders', 'completed orders', etc.)",
     "taskId": number (for task updates, extract ID from message),
     "dateRange": "string (for get intent: extract date range filters like 'this week', 'this month', 'last week', 'today', 'yesterday', 'last month', 'next week', 'next month', 'tomorrow', etc. For bulk updates: extract date range when user says 'all today's', 'all yesterday's', 'all this week's', etc.)",
@@ -118,6 +271,12 @@ Title Extraction:
 - For appointments: Extract the main subject (e.g., "appointment", "meeting", "doctor visit")
 - For tasks: Extract the task description
 - If message says "appointment" or "have an appointment", use "Appointment" as title
+- If ORIGINAL MESSAGE is provided, extract titles/descriptions from ORIGINAL MESSAGE to preserve native language
+
+Product Name Extraction:
+- If ORIGINAL MESSAGE is provided, ALWAYS extract product names from ORIGINAL MESSAGE to preserve the native language
+- Use quantities and other structured data from TRANSLATED MESSAGE
+- Example: If original says "5 laptops order cheyali" and translated says "order 5 laptops", extract "laptops" from original
 
 Examples:
 - "Have an appointment at 2PM on Saturday 15th November" → {"intent": "create", "entityType": "task", "parameters": {"title": "Appointment", "dueDate": "Saturday 15th November 2PM"}}
@@ -128,7 +287,7 @@ Examples:
 - "mark all tasks from this week as done" → {"intent": "update", "entityType": "task", "parameters": {"status": "completed", "dateRange": "this week", "isBulkUpdate": true}}
 - "update all my orders as done" → {"intent": "update", "entityType": "order", "parameters": {"status": "completed", "isBulkUpdate": true}}
 
-Message: "${message}"
+${hasOriginalMessage ? '' : `Message: "${message}"`}
 
 Return ONLY the JSON object, no other text:`;
 

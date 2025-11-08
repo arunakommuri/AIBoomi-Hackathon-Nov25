@@ -26,8 +26,33 @@ export async function handleCreate(
   } else if (analysis.entityType === 'order' || analysis.entityType === 'product') {
     try {
       // Check if multiple items are provided
-      const items = analysis.parameters.items;
+      let items = analysis.parameters.items;
       const hasMultipleItems = items && Array.isArray(items) && items.length > 0;
+      
+      // Deduplicate items by product name and sum quantities if duplicates exist
+      if (hasMultipleItems) {
+        const itemMap = new Map<string, number>();
+        for (const item of items) {
+          const productName = (item.productName || 'Unknown').toLowerCase().trim();
+          const quantity = item.quantity || 1;
+          if (itemMap.has(productName)) {
+            itemMap.set(productName, itemMap.get(productName)! + quantity);
+          } else {
+            itemMap.set(productName, quantity);
+          }
+        }
+        // Reconstruct items array with deduplicated items
+        items = Array.from(itemMap.entries()).map(([productName, quantity]) => {
+          // Find original item to preserve original product name casing
+          const originalItem = items.find((item: any) => 
+            (item.productName || 'Unknown').toLowerCase().trim() === productName
+          );
+          return {
+            productName: originalItem?.productName || productName,
+            quantity: quantity
+          };
+        });
+      }
       
       // For single item, use productName and quantity
       // For multiple items, use items array

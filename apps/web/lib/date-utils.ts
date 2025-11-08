@@ -223,25 +223,34 @@ export function parseDateTime(dateTimeStr: string): Date | null {
   
   // Check for date keywords in the original string (case-insensitive)
   // We check the original string to catch patterns like "today evening 6pm"
-  const hasToday = /\btoday\b/i.test(lowerStr);
-  const hasTomorrow = /\btomorrow\b/i.test(lowerStr);
+  // Check for date keywords - order matters: check more specific first
+  // Priority: day after tomorrow > tomorrow > today > yesterday > next week > next month
+  // This ensures "tomorrow" is handled even if "today" appears elsewhere in the string
   const hasDayAfter = /\bday\s+after\s+tomorrow\b/i.test(lowerStr) || /\bday\s+after\b/i.test(lowerStr);
+  const hasTomorrow = /\btomorrow\b/i.test(lowerStr);
+  const hasToday = /\btoday\b/i.test(lowerStr);
   const hasYesterday = /\byesterday\b/i.test(lowerStr);
   const hasNextWeek = /\bnext\s+week\b/i.test(lowerStr);
   const hasNextMonth = /\bnext\s+month\b/i.test(lowerStr);
   
-  if (hasToday) {
-    // Today - keep current date, just update time if provided
+  if (hasDayAfter) {
     targetDate = new Date(now);
-  } else if (hasDayAfter) {
     targetDate.setDate(targetDate.getDate() + 2);
   } else if (hasTomorrow) {
+    // Tomorrow - add 1 day to current date
+    targetDate = new Date(now);
     targetDate.setDate(targetDate.getDate() + 1);
+  } else if (hasToday) {
+    // Today - keep current date, just update time if provided
+    targetDate = new Date(now);
   } else if (hasYesterday) {
+    targetDate = new Date(now);
     targetDate.setDate(targetDate.getDate() - 1);
   } else if (hasNextWeek) {
+    targetDate = new Date(now);
     targetDate.setDate(targetDate.getDate() + 7);
   } else if (hasNextMonth) {
+    targetDate = new Date(now);
     targetDate.setMonth(targetDate.getMonth() + 1);
   } else {
     // No relative date keywords found - check if we have time but no date

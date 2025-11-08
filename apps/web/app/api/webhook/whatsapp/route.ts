@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { analyzeMessage, type MessageAnalysis } from '@/lib/gemini';
+import { analyzeMessage, type MessageAnalysis, detectLanguage, translateTextWithGemini } from '@/lib/gemini';
 import {
   handleCreate,
   handleGet,
@@ -175,11 +175,48 @@ export async function POST(request: NextRequest) {
       mediaInfo.originalBody = body || null;
     }
 
+    // Detect language first to avoid unnecessary translation calls
+    // Only translate if message is mixed-language or non-English
+    const originalBody = processedBody || body;
+    let translatedBody = originalBody;
+    
+    if (translatedBody && translatedBody.trim()) {
+      try {
+        // Use Gemini to detect language type
+        const languageDetection = await detectLanguage(translatedBody);
+        console.log('Language detection result:', languageDetection);
+        
+        // Only translate if needed (mixed language or non-English)
+        if (languageDetection.needsTranslation) {
+          try {
+            // Use Gemini for translation instead of Sarvam API
+            translatedBody = await translateTextWithGemini(translatedBody);
+            if (translatedBody !== originalBody) {
+              console.log('Translated message with Gemini:', { 
+                original: originalBody, 
+                translated: translatedBody,
+                detectedLanguages: languageDetection.detectedLanguages 
+              });
+            }
+          } catch (translationError) {
+            console.error('Error translating message with Gemini (using original):', translationError);
+            // Continue with original text if translation fails
+          }
+        } else {
+          console.log('Message is English-only, skipping translation');
+        }
+      } catch (error) {
+        console.error('Error detecting language (using original):', error);
+        // Continue with original text if language detection fails
+      }
+    }
+
     // Store message in database with all media information
+    // Store original body, but use translated body for processing
     await MessageService.storeMessage(
       messageSid,
       from,
-      processedBody || body,
+      translatedBody || body,
       referredMessageSid,
       mediaInfo
     );
@@ -187,14 +224,14 @@ export async function POST(request: NextRequest) {
     // Process message
     let responseMessage = 'Hi';
     
-    if (processedBody && processedBody.trim()) {
+    if (translatedBody && translatedBody.trim()) {
       try {
         const userNumber = from;
-        const messageBody = processedBody.trim().toLowerCase();
+        const messageBody = translatedBody.trim().toLowerCase();
 
         // If message is forwarded, treat it as an order creation request
         if (isForwarded) {
-          const analysis = await analyzeMessage(processedBody);
+          const analysis = await analyzeMessage(translatedBody, originalBody || undefined);
           // Force entity type to order for forwarded messages
           if (analysis.intent === 'create' || analysis.intent === 'unknown') {
             const orderAnalysis = {
@@ -202,7 +239,7 @@ export async function POST(request: NextRequest) {
               entityType: 'order',
               parameters: analysis.parameters || {}
             };
-            responseMessage = await handleCreate(userNumber, orderAnalysis, processedBody);
+            responseMessage = await handleCreate(userNumber, orderAnalysis, originalBody || undefined);
             return createTwiMLResponse(responseMessage);
           }
         }
@@ -211,7 +248,7 @@ export async function POST(request: NextRequest) {
         if (referredMessageSid) {
           const context = await loadMessageContext(userNumber, referredMessageSid);
           if (context) {
-            const replyResponse = await handleReply(userNumber, processedBody, referredMessageSid, context);
+            const replyResponse = await handleReply(userNumber, translatedBody, referredMessageSid, context);
             if (replyResponse) {
               return createTwiMLResponse(replyResponse);
             }
@@ -237,13 +274,14 @@ export async function POST(request: NextRequest) {
           analysis = imageAnalysisResult;
           console.log('Using image analysis directly:', analysis);
         } else {
-          // Analyze text message
-          analysis = await analyzeMessage(processedBody);
+          // Analyze text message - pass both translated (for intent) and original (for product names)
+          analysis = await analyzeMessage(translatedBody, originalBody || undefined);
         }
         
         const handler = INTENT_HANDLERS[analysis.intent];
         if (handler) {
-          responseMessage = await handler(userNumber, analysis, processedBody);
+          // Pass original body to handlers so they can preserve original product names
+          responseMessage = await handler(userNumber, analysis, originalBody || undefined);
         } else {
           responseMessage = getUnknownIntentMessage();
         }
